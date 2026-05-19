@@ -1,0 +1,87 @@
+import importlib.util
+import json
+import threading
+from pathlib import Path
+
+import mlx.core as mx
+from tokenizers import Tokenizer
+
+
+MODEL_ID = "jina-embeddings-v5-text-small"
+PROJECT_DIR = Path(__file__).resolve().parent.parent
+DEFAULT_MODEL_DIR = PROJECT_DIR / "models" / "jina-embeddings-v5-text-small-retrieval-mlx"
+
+
+class MLXEmbeddingService:
+    def __init__(self, model_dir: Path = DEFAULT_MODEL_DIR):
+        self.model_id = MODEL_ID
+        self.model_dir = model_dir
+        self._model = None
+        self._tokenizer = None
+        self._load_lock = threading.Lock()
+        self._encode_lock = threading.Lock()
+
+    def embed(
+        self,
+        texts: list[str],
+        *,
+        task_type: str,
+        dimensions: int,
+        max_length: int = 8192,
+    ) -> list[list[float]]:
+        model, tokenizer = self._load()
+        with self._encode_lock:
+            embeddings = model.encode(
+                texts,
+                tokenizer,
+                task_type=task_type,
+                truncate_dim=dimensions,
+                max_length=max_length,
+            )
+            mx.eval(embeddings)
+        return embeddings.tolist()
+
+    def count_tokens(self, texts: list[str], task_type: str) -> int:
+        _, tokenizer = self._load()
+        prefix = {
+            "retrieval.query": "Query: ",
+            "retrieval.passage": "Document: ",
+            "classification": "Document: ",
+            "text-matching": "Document: ",
+            "clustering": "Document: ",
+        }.get(task_type, "")
+        return sum(len(tokenizer.encode(prefix + text).ids) for text in texts)
+
+    def _load(self):
+        if self._model is not None and self._tokenizer is not None:
+            return self._model, self._tokenizer
+
+        with self._load_lock:
+            if self._model is not None and self._tokenizer is not None:
+                return self._model, self._tokenizer
+
+            model_dir = self.model_dir
+            if not model_dir.exists():
+                raise FileNotFoundError(
+                    f"Model not found at {model_dir}. Run: "
+                    "uv run hf download jinaai/jina-embeddings-v5-text-small-retrieval-mlx "
+                    "--local-dir models/jina-embeddings-v5-text-small-retrieval-mlx"
+                )
+
+            spec = importlib.util.spec_from_file_location("jina_mlx_model", model_dir / "model.py")
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Cannot load model implementation from {model_dir}")
+
+            model_module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(model_module)
+
+            with (model_dir / "config.json").open() as f:
+                config = json.load(f)
+
+            model = model_module.JinaEmbeddingModel(config)
+            weights = mx.load(str(model_dir / "model.safetensors"))
+            model.load_weights(list(weights.items()))
+
+            self._model = model
+            self._tokenizer = Tokenizer.from_file(str(model_dir / "tokenizer.json"))
+            return self._model, self._tokenizer

@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.liyifan.jina-v5-mlx-embedding</string>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/liyifan/Documents/Codex/2026-05-19/mlx-mac-jinaai-jina-embeddings-v5/jina-v5-mlx-demo</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/liyifan/.local/bin/uv</string>
+    <string>run</string>
+    <string>python</string>
+    <string>main.py</string>
+    <string>serve</string>
+    <string>--host</string>
+    <string>0.0.0.0</string>
+    <string>--port</string>
+    <string>8000</string>
+    <string>--max-batch-size</string>
+    <string>4</string>
+    <string>--batch-timeout-ms</string>
+    <string>5</string>
+    <string>--max-batch-tokens</string>
+    <string>8192</string>
+    <string>--length-tolerance</string>
+    <string>0.2</string>
+    <string>--max-length</string>
+    <string>8192</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/Users/liyifan/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>PYTHONUNBUFFERED</key>
+    <string>1</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/liyifan/Documents/Codex/2026-05-19/mlx-mac-jinaai-jina-embeddings-v5/jina-v5-mlx-demo/logs/embedding-service.out.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/Users/liyifan/Documents/Codex/2026-05-19/mlx-mac-jinaai-jina-embeddings-v5/jina-v5-mlx-demo/logs/embedding-service.err.log</string>
+</dict>
+</plist>

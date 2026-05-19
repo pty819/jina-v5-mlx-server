@@ -1,0 +1,14 @@
+[project]
+name = "jina-v5-mlx-demo"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.136.1",
+    "httpx>=0.28.1",
+    "huggingface-hub[hf-xet]>=1.15.0",
+    "mlx>=0.31.2",
+    "tokenizers>=0.23.1",
+    "uvicorn[standard]>=0.47.0",
+]

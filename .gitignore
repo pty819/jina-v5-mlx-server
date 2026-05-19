@@ -1,0 +1,18 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+.DS_Store
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Downloaded model weights
+models/
+
+# Local runtime artifacts
+logs/
+.omc/
