@@ -178,7 +178,7 @@ This keeps short queries from being padded up to a long document's sequence leng
 
 ## OpenViking Configuration
 
-Recommended dense embedding config:
+OpenViking's `JinaDenseEmbedder` automatically sends `task=retrieval.query` for queries and `task=retrieval.passage` for indexing:
 
 ```json
 {
@@ -188,9 +188,7 @@ Recommended dense embedding config:
       "api_key": "local",
       "api_base": "http://127.0.0.1:8000/v1",
       "model": "jina-embeddings-v5-text-small",
-      "dimension": 1024,
-      "query_param": "retrieval.query",
-      "document_param": "retrieval.passage"
+      "dimension": 1024
     },
     "max_concurrent": 10
   }
