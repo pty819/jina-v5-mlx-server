@@ -1,78 +1,29 @@
+import asyncio
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+import mlx.core as mx
+from fastapi import APIRouter, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, model_validator
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from jina_v5_mlx_demo.batching import DynamicBatcher
-
-
-VALID_TASK_TYPES = {
-    "retrieval.query",
-    "retrieval.passage",
-    "classification",
-    "text-matching",
-    "clustering",
-    "separation",
-}
-VALID_DIMENSIONS = {32, 64, 128, 256, 512, 768, 1024}
-VALID_MAX_LENGTH_RANGE = range(1, 32769)
-QUERY_MODEL_ALIASES = {
-    "jina-v5-query",
-    "jina-embeddings-v5-text-small-query",
-}
-PASSAGE_MODEL_ALIASES = {
-    "jina-v5",
-    "jina-v5-passage",
-    "jina-v5-document",
-    "jina-embeddings-v5-text-small",
-    "jina-embeddings-v5-text-small-passage",
-    "jina-embeddings-v5-text-small-document",
-}
-
-
-class RequestError(ValueError):
-    def __init__(self, message: str, status: int = 400):
-        super().__init__(message)
-        self.status = status
-
-
-class EmbeddingRequest(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
-    input: str | list[str]
-    model: str | None = None
-    dimensions: int = 1024
-    encoding_format: str = "float"
-    task: str | None = None
-    task_type: str | None = None
-    input_type: str | None = None
-    normalized: bool = True
-    embedding_type: str = "float"
-    max_length: int | None = None
-
-    @model_validator(mode="after")
-    def validate_request(self):
-        normalize_input(self.input)
-        parse_dimensions(self.dimensions)
-        parse_task_type(self.task, self.task_type, self.input_type, self.model)
-        if self.max_length is not None:
-            parse_max_length(self.max_length)
-
-        if self.encoding_format != "float":
-            raise ValueError("Only float encoding_format is supported")
-        if self.embedding_type != "float":
-            raise ValueError("Only float embeddings are supported")
-        if self.normalized is not True:
-            raise ValueError("Only normalized=true is supported because the MLX model returns L2-normalized vectors")
-
-        return self
+from jina_v5_mlx_demo.metrics import RequestMetrics
+from jina_v5_mlx_demo.rerank_queue import RerankQueue
+from jina_v5_mlx_demo.routes import (
+    jina_router,
+    openai_router,
+    register_embedding_routes,
+    register_rerank_routes,
+    utils_router,
+)
+from jina_v5_mlx_demo.schema import RequestError, parse_max_length
 
 
 def create_app(
     embedding_service,
     *,
+    rerank_service=None,
+    metrics=None,
     max_batch_size: int = 4,
     batch_timeout_ms: int = 5,
     max_batch_tokens: int = 8192,
@@ -80,78 +31,212 @@ def create_app(
     default_max_length: int = 8192,
 ) -> FastAPI:
     parse_max_length(default_max_length)
+
+    inference_gate = asyncio.Lock()
     batcher = DynamicBatcher(
         embedding_service,
         max_batch_size=max_batch_size,
         batch_timeout_ms=batch_timeout_ms,
         max_batch_tokens=max_batch_tokens,
         length_tolerance=length_tolerance,
+        inference_gate=inference_gate,
     )
+
+    rerank_queue = (
+        RerankQueue(rerank_service, inference_gate=inference_gate)
+        if rerank_service is not None
+        else None
+    )
+    metrics = metrics or RequestMetrics()
+
+    # --- OpenAI group ---
+    register_embedding_routes(openai_router, embedding_service, batcher, metrics, default_max_length, tags=["OpenAI"])
+    if rerank_service is not None:
+        register_rerank_routes(openai_router, rerank_service, rerank_queue, metrics, tags=["OpenAI"])
+
+    # --- Jina group ---
+    register_embedding_routes(jina_router, embedding_service, batcher, metrics, default_max_length, tags=["Jina"])
+    if rerank_service is not None:
+        register_rerank_routes(jina_router, rerank_service, rerank_queue, metrics, tags=["Jina"])
+
+    # --- /v1 bare routes (same handlers, no prefix) ---
+    v1_router = APIRouter(prefix="/v1")
+    register_embedding_routes(v1_router, embedding_service, batcher, metrics, default_max_length, tags=["v1"])
+    if rerank_service is not None:
+        register_rerank_routes(v1_router, rerank_service, rerank_queue, metrics, tags=["v1"])
+
+    # --- Utils group ---
+    @utils_router.get("/health", tags=["Utils"], summary="Health check")
+    async def health():
+        result = {"status": "ok", "embedding_model": embedding_service.model_id}
+        if rerank_service is not None:
+            result["rerank_model"] = rerank_service.model_id
+        else:
+            result["model"] = embedding_service.model_id
+        return result
+
+    @utils_router.get("/stats.json", tags=["Utils"], summary="Stats JSON")
+    async def stats_json():
+        snapshot = metrics.snapshot(
+            embedding_state=batcher.queue_state(),
+            rerank_state=rerank_queue.queue_state() if rerank_queue else {"queued": 0, "active": 0, "unfinished": 0},
+        )
+        snapshot["mlx_memory"] = {
+            "active_mb": round(mx.get_active_memory() / 1024**2),
+            "cache_mb": round(mx.get_cache_memory() / 1024**2),
+        }
+        return snapshot
+
+    @utils_router.get("/stats", tags=["Utils"], summary="Stats dashboard")
+    async def stats_html():
+        snapshot = await stats_json()
+        return HTMLResponse(content=_render_stats_html(snapshot))
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         await batcher.start()
+        if rerank_queue is not None:
+            await rerank_queue.start()
         try:
             yield
         finally:
+            if rerank_queue is not None:
+                await rerank_queue.stop()
             await batcher.stop()
 
     app = FastAPI(
-        title="Jina v5 MLX Embedding Server",
-        version="0.1.0",
-        description="Local FastAPI serving for jina-embeddings-v5-text-small-retrieval-mlx.",
+        title="Jina v5 MLX Server",
+        version="0.2.0",
+        description="Local FastAPI serving for Jina v5 embeddings and reranking.",
         lifespan=lifespan,
+        openapi_tags=[
+            {"name": "OpenAI", "description": "OpenAI-compatible endpoints (`/openai/v1`)."},
+            {"name": "Jina", "description": "Jina-native endpoints (`/jina/v1`)."},
+            {"name": "v1", "description": "Bare `/v1` prefix — same handlers, no vendor group."},
+            {"name": "Utils", "description": "Health, stats, and operator tools."},
+        ],
     )
 
-    @app.exception_handler(RequestError)
-    async def request_error_handler(_request: Request, error: RequestError):
-        return error_response(error.status, str(error))
+    app.exception_handler(RequestError)(request_error_handler)
+    app.exception_handler(ValueError)(value_error_handler)
+    app.exception_handler(RequestValidationError)(validation_error_handler)
 
-    @app.exception_handler(ValueError)
-    async def value_error_handler(_request: Request, error: ValueError):
-        return error_response(400, str(error))
-
-    @app.exception_handler(RequestValidationError)
-    async def validation_error_handler(_request: Request, error: RequestValidationError):
-        return error_response(400, validation_message(error))
-
-    @app.get("/health")
-    async def health():
-        return {
-            "status": "ok",
-            "model": embedding_service.model_id,
-        }
-
-    @app.post("/v1/embeddings")
-    @app.post("/openai/v1/embeddings")
-    @app.post("/jina/v1/embeddings")
-    async def embeddings(request: EmbeddingRequest):
-        texts = normalize_input(request.input)
-        task_type = parse_task_type(request.task, request.task_type, request.input_type, request.model)
-        dimensions = parse_dimensions(request.dimensions)
-        max_length = parse_max_length(request.max_length or default_max_length)
-
-        embeddings = await batcher.embed(texts, task_type=task_type, dimensions=dimensions, max_length=max_length)
-        prompt_tokens = embedding_service.count_tokens(texts, task_type)
-
-        return {
-            "object": "list",
-            "model": embedding_service.model_id,
-            "data": [
-                {
-                    "object": "embedding",
-                    "index": index,
-                    "embedding": embedding,
-                }
-                for index, embedding in enumerate(embeddings)
-            ],
-            "usage": {
-                "prompt_tokens": prompt_tokens,
-                "total_tokens": prompt_tokens,
-            },
-        }
+    app.include_router(v1_router)
+    app.include_router(openai_router)
+    app.include_router(jina_router)
+    app.include_router(utils_router)
 
     return app
+
+
+async def request_error_handler(_request: Request, error: RequestError):
+    return error_response(error.status, str(error))
+
+
+async def value_error_handler(_request: Request, error: ValueError):
+    return error_response(400, str(error))
+
+
+async def validation_error_handler(_request: Request, error: RequestValidationError):
+    return error_response(400, validation_message(error))
+
+
+def _render_stats_html(snapshot: dict) -> str:
+    return """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Jina MLX Server Stats</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; background:#0f1117; color:#e0e0e0; padding:24px; }
+  h1 { font-size:20px; font-weight:600; margin-bottom:4px; color:#fff; }
+  .ts { font-size:12px; color:#888; margin-bottom:20px; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; max-width:720px; }
+  .card { background:#1a1d27; border:1px solid #2a2d37; border-radius:10px; padding:16px 20px; }
+  .card h2 { font-size:14px; font-weight:600; text-transform:uppercase; letter-spacing:1px; margin-bottom:12px; }
+  .card:nth-child(1) h2 { color:#6dd5fa; }
+  .card:nth-child(2) h2 { color:#f6d365; }
+  .metric { display:flex; align-items:center; gap:10px; margin-bottom:8px; font-size:13px; }
+  .label { width:90px; color:#999; flex-shrink:0; }
+  .value { font-weight:600; min-width:36px; text-align:right; }
+  .value.num { font-variant-numeric:tabular-nums; font-size:16px; color:#fff; }
+  .bar-track { flex:1; height:6px; background:#2a2d37; border-radius:3px; overflow:hidden; }
+  .bar-fill { height:100%; border-radius:3px; transition:width .4s ease; }
+  .bar-fill.req { background:linear-gradient(90deg,#6dd5fa,#6dd5fa); }
+  .card:nth-child(2) .bar-fill.req { background:linear-gradient(90deg,#f6d365,#f6d365); }
+  .bar-fill.q { background:linear-gradient(90deg,#ff6b6b,#ee5a24); }
+  .mlx { margin-top:16px; max-width:720px; background:#1a1d27; border:1px solid #2a2d37; border-radius:10px; padding:16px 20px; }
+  .mlx h2 { font-size:14px; font-weight:600; color:#a29bfe; text-transform:uppercase; letter-spacing:1px; margin-bottom:8px; }
+  .mlx .metric { margin-bottom:4px; }
+  .foot { margin-top:12px; font-size:11px; color:#555; max-width:720px; display:flex; justify-content:space-between; }
+  .dot { display:inline-block; width:6px; height:6px; border-radius:50%; background:#4cd137; margin-right:6px; animation:pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+  .dot.err { background:#ff6b6b; animation:none; }
+</style>
+</head>
+<body>
+<h1>Jina MLX Server</h1>
+<div class="ts" id="ts"></div>
+<div class="grid">
+  <div class="card" id="emb-card">
+    <h2>Embedding</h2>
+    <div class="metric"><span class="label">Requests 1h</span><div class="bar-track"><div class="bar-fill req" id="emb-1h-bar"></div></div><span class="value" id="emb-1h">-</span></div>
+    <div class="metric"><span class="label">Requests 24h</span><div class="bar-track"><div class="bar-fill req" id="emb-1d-bar"></div></div><span class="value" id="emb-1d">-</span></div>
+    <div class="metric"><span class="label">Queued</span><span class="value num" id="emb-q">-</span></div>
+    <div class="metric"><span class="label">Active</span><span class="value num" id="emb-a">-</span></div>
+    <div class="metric"><span class="label">Unfinished</span><div class="bar-track"><div class="bar-fill q" id="emb-uf-bar"></div></div><span class="value num" id="emb-uf">-</span></div>
+  </div>
+  <div class="card" id="rr-card">
+    <h2>Rerank</h2>
+    <div class="metric"><span class="label">Requests 1h</span><div class="bar-track"><div class="bar-fill req" id="rr-1h-bar"></div></div><span class="value" id="rr-1h">-</span></div>
+    <div class="metric"><span class="label">Requests 24h</span><div class="bar-track"><div class="bar-fill req" id="rr-1d-bar"></div></div><span class="value" id="rr-1d">-</span></div>
+    <div class="metric"><span class="label">Queued</span><span class="value num" id="rr-q">-</span></div>
+    <div class="metric"><span class="label">Active</span><span class="value num" id="rr-a">-</span></div>
+    <div class="metric"><span class="label">Unfinished</span><div class="bar-track"><div class="bar-fill q" id="rr-uf-bar"></div></div><span class="value num" id="rr-uf">-</span></div>
+  </div>
+</div>
+<div class="mlx">
+  <h2>MLX Memory</h2>
+  <div class="metric"><span class="label">Active</span><span class="value num" id="mlx-active">-</span><span class="label" style="width:auto;color:#888">MB</span></div>
+  <div class="metric"><span class="label">Cache</span><span class="value num" id="mlx-cache">-</span><span class="label" style="width:auto;color:#888">MB</span></div>
+</div>
+<div class="foot">
+  <span><span class="dot" id="status-dot"></span><span id="status-text">connecting...</span></span>
+  <span>Memory-only counters, reset on restart</span>
+</div>
+<script>
+function $(id){return document.getElementById(id)}
+function upd(prefix, s, d){
+  $(prefix+'-1h').textContent=s.requests_1h;
+  $(prefix+'-1d').textContent=s.requests_1d;
+  $(prefix+'-q').textContent=s.queued;
+  $(prefix+'-a').textContent=s.active;
+  $(prefix+'-uf').textContent=s.unfinished;
+  var pct=Math.max(s.requests_1d,1);
+  $(prefix+'-1h-bar').style.width=(s.requests_1h/pct*100)+'%';
+  $(prefix+'-1d-bar').style.width='100%';
+  $(prefix+'-uf-bar').style.width=Math.min(s.unfinished*20,100)+'%';
+}
+function tick(){
+  fetch('/stats.json').then(r=>r.json()).then(d=>{
+    upd('emb',d.embedding);
+    upd('rr',d.rerank);
+    var m=d.mlx_memory||{};
+    $('mlx-active').textContent=m.active_mb||0;
+    $('mlx-cache').textContent=m.cache_mb||0;
+    $('ts').textContent=new Date().toLocaleString();
+    $('status-dot').className='dot';
+    $('status-text').textContent='live';
+  }).catch(()=>{
+    $('status-dot').className='dot err';
+    $('status-text').textContent='fetch error';
+  });
+}
+tick(); setInterval(tick, 2000);
+</script>
+</body>
+</html>"""
 
 
 def error_response(status: int, message: str) -> JSONResponse:
@@ -177,55 +262,3 @@ def validation_message(error: RequestValidationError) -> str:
     if first_error.get("loc") == ("body", "input", "str") or first_error.get("loc") == ("body", "input", "list[str]"):
         return "input must be a string or a list of strings"
     return str(first_error.get("msg", "Invalid request"))
-
-
-def normalize_input(value: str | list[str]) -> list[str]:
-    if isinstance(value, str):
-        return [value]
-    if isinstance(value, list) and all(isinstance(item, str) for item in value):
-        if not value:
-            raise RequestError("input list must not be empty")
-        return value
-    raise RequestError("input must be a string or a list of strings")
-
-
-def parse_dimensions(value: int) -> int:
-    if not isinstance(value, int) or value not in VALID_DIMENSIONS:
-        raise RequestError("dimensions must be one of 32, 64, 128, 256, 512, 768, 1024")
-    return value
-
-
-def parse_max_length(value: int) -> int:
-    if not isinstance(value, int) or value not in VALID_MAX_LENGTH_RANGE:
-        raise RequestError("max_length must be an integer between 1 and 32768")
-    return value
-
-
-def parse_task_type(
-    task: str | None,
-    task_type: str | None,
-    input_type: str | None = None,
-    model: str | None = None,
-) -> str:
-    value = task or task_type
-    if value is None and input_type is not None:
-        normalized_input_type = input_type.lower()
-        if normalized_input_type in {"query", "retrieval.query"}:
-            value = "retrieval.query"
-        elif normalized_input_type in {"passage", "document", "doc", "retrieval.passage"}:
-            value = "retrieval.passage"
-    if value is None and model is not None:
-        normalized_model = model.lower()
-        if normalized_model in QUERY_MODEL_ALIASES:
-            value = "retrieval.query"
-        elif normalized_model in PASSAGE_MODEL_ALIASES:
-            value = "retrieval.passage"
-    value = value or "retrieval.passage"
-    if not isinstance(value, str) or value not in VALID_TASK_TYPES:
-        raise RequestError(
-            "task/task_type/input_type must resolve to one of retrieval.query, retrieval.passage, "
-            "classification, text-matching, clustering, separation"
-        )
-    if value == "separation":
-        return "clustering"
-    return value

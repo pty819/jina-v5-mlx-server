@@ -1,4 +1,5 @@
 import asyncio
+import threading
 import unittest
 
 from jina_v5_mlx_demo.batching import DynamicBatcher
@@ -23,6 +24,23 @@ class RecordingEmbeddingService:
 
     def count_tokens(self, texts, task_type):
         return sum(int(text) for text in texts)
+
+
+class BlockingEmbeddingService(RecordingEmbeddingService):
+    def __init__(self, started, release):
+        super().__init__()
+        self.started = started
+        self.release = release
+
+    def embed(self, texts, *, task_type, dimensions, max_length):
+        self.started.set()
+        self.release.wait(timeout=1)
+        return super().embed(
+            texts,
+            task_type=task_type,
+            dimensions=dimensions,
+            max_length=max_length,
+        )
 
 
 class DynamicBatcherTest(unittest.IsolatedAsyncioTestCase):
@@ -62,6 +80,33 @@ class DynamicBatcherTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.service.batches), 3)
         self.assertEqual({batch["task_type"] for batch in self.service.batches}, {"retrieval.query", "retrieval.passage"})
         self.assertEqual({batch["dimensions"] for batch in self.service.batches}, {32, 64})
+
+    async def test_reports_queued_active_and_unfinished_jobs(self):
+        started = threading.Event()
+        release = threading.Event()
+        batcher = DynamicBatcher(
+            BlockingEmbeddingService(started, release),
+            max_batch_size=1,
+            batch_timeout_ms=0,
+        )
+        await batcher.start()
+        task = asyncio.create_task(
+            batcher.embed(
+                ["100"],
+                task_type="retrieval.passage",
+                dimensions=32,
+                max_length=8192,
+            )
+        )
+
+        await asyncio.to_thread(started.wait, 1)
+        self.assertEqual(batcher.queue_state()["active"], 1)
+        self.assertEqual(batcher.queue_state()["unfinished"], 1)
+
+        release.set()
+        await task
+        self.assertEqual(batcher.queue_state()["unfinished"], 0)
+        await batcher.stop()
 
 
 if __name__ == "__main__":

@@ -1,25 +1,33 @@
-# Jina v5 MLX Embedding Server
+# Jina v5 MLX Server
 
-FastAPI serving for `jinaai/jina-embeddings-v5-text-small-retrieval-mlx` on Apple Silicon with MLX.
+FastAPI serving for `jinaai/jina-embeddings-v5-text-small-retrieval-mlx` embeddings and `jinaai/jina-reranker-v3-mlx` reranking on Apple Silicon with MLX.
 
-The server provides OpenAI-compatible and Jina-style embedding endpoints, supports query/document asymmetric embeddings, and batches queued requests by similar token length to avoid padding short inputs with long documents.
+The server provides embedding and reranking endpoints from a single local process, with dynamic batching for embeddings, request-level reranking, and operator stats.
 
 ## Features
 
-- Runs Jina v5 text small retrieval MLX weights locally on macOS Apple Silicon.
-- OpenAI-compatible endpoint: `POST /v1/embeddings`.
-- Explicit aliases: `POST /openai/v1/embeddings` and `POST /jina/v1/embeddings`.
-- Jina task routing: `retrieval.query` for queries and `retrieval.passage` for documents.
-- OpenAI-compatible query/document routing via `model`, `task`, `task_type`, or `input_type`.
+- Runs Jina v5 embedding and Jina v3 reranker MLX weights locally on macOS Apple Silicon.
+- **Embedding endpoints:**
+  - `POST /v1/embeddings`
+  - `POST /openai/v1/embeddings`
+  - `POST /jina/v1/embeddings`
+- **Reranking endpoints:**
+  - `POST /v1/rerank`
+  - `POST /jina/v1/rerank`
+  - `POST /openai/v1/rerank` (local Jina-shaped compatibility alias)
+- Jina task routing for embeddings: `retrieval.query` and `retrieval.passage`.
 - Matryoshka output dimensions: `32`, `64`, `128`, `256`, `512`, `768`, `1024`.
-- Dynamic batching with token-length bucketing.
+- Dynamic batching with token-length bucketing for embeddings.
+- Request-level rerank queue with shared MLX inference gate.
+- Operator stats: `GET /stats` (HTML) and `GET /stats.json`.
 - Optional macOS `launchd` background service.
 
 ## Requirements
 
 - macOS on Apple Silicon.
 - Python managed by `uv`.
-- About 1.2 GB for model weights.
+- About 1.2 GB for embedding model weights.
+- About 600 MB for reranker model weights.
 
 ## Setup
 
@@ -28,13 +36,14 @@ uv sync
 
 uv run hf download jinaai/jina-embeddings-v5-text-small-retrieval-mlx \
   --local-dir models/jina-embeddings-v5-text-small-retrieval-mlx
+
+uv run hf download jinaai/jina-reranker-v3-mlx \
+  --local-dir models/jina-reranker-v3-mlx
 ```
 
 The `models/` directory is ignored by Git.
 
 ## Run
-
-Local-only:
 
 ```bash
 uv run python main.py serve \
@@ -47,12 +56,13 @@ uv run python main.py serve \
   --max-length 8192
 ```
 
-LAN access:
+Override model directories:
 
 ```bash
-uv run python main.py serve \
-  --host 0.0.0.0 \
-  --port 8000
+uv run python main.py \
+  --model-dir /path/to/embedding-model \
+  --reranker-dir /path/to/reranker-model \
+  serve --host 0.0.0.0 --port 8000
 ```
 
 FastAPI docs:
@@ -67,9 +77,9 @@ Health check:
 curl http://127.0.0.1:8000/health
 ```
 
-## Endpoints
+## Embedding Endpoints
 
-The same embedding implementation is exposed through three routes:
+Three route aliases serve the same embedding implementation:
 
 ```text
 POST /v1/embeddings
@@ -77,41 +87,9 @@ POST /openai/v1/embeddings
 POST /jina/v1/embeddings
 ```
 
-Response shape follows the OpenAI embedding response:
+### OpenAI-Compatible Usage
 
-```json
-{
-  "object": "list",
-  "model": "jina-embeddings-v5-text-small",
-  "data": [
-    {
-      "object": "embedding",
-      "index": 0,
-      "embedding": [0.1, 0.2]
-    }
-  ],
-  "usage": {
-    "prompt_tokens": 12,
-    "total_tokens": 12
-  }
-}
-```
-
-## OpenAI-Compatible Usage
-
-Use this base URL for OpenAI-compatible clients:
-
-```text
-http://127.0.0.1:8000/v1
-```
-
-or the explicit namespace:
-
-```text
-http://127.0.0.1:8000/openai/v1
-```
-
-Example:
+Base URL: `http://127.0.0.1:8000/v1` or `http://127.0.0.1:8000/openai/v1`
 
 ```bash
 curl http://127.0.0.1:8000/openai/v1/embeddings \
@@ -124,15 +102,12 @@ curl http://127.0.0.1:8000/openai/v1/embeddings \
   }'
 ```
 
-Accepted model names and aliases:
+Accepted embedding model aliases:
 
 - `jina-embeddings-v5-text-small`
-- `jina-v5`
-- `jina-v5-passage`
-- `jina-v5-document`
-- `jina-v5-query`
+- `jina-v5`, `jina-v5-passage`, `jina-v5-document`, `jina-v5-query`
 
-OpenAI's standard embedding schema has no official query/document field. This server supports several compatible conventions:
+Query/document routing:
 
 - `model: "jina-v5-query"` maps to `retrieval.query`.
 - `model: "jina-v5-passage"` maps to `retrieval.passage`.
@@ -140,7 +115,7 @@ OpenAI's standard embedding schema has no official query/document field. This se
 - `input_type: "passage"` or `"document"` maps to `retrieval.passage`.
 - `task` or `task_type` can directly specify Jina tasks.
 
-## Jina-Style Usage
+### Jina-Style Usage
 
 ```bash
 curl http://127.0.0.1:8000/jina/v1/embeddings \
@@ -155,16 +130,114 @@ curl http://127.0.0.1:8000/jina/v1/embeddings \
   }'
 ```
 
-Supported retrieval tasks:
+## Reranking Endpoints
 
-- `retrieval.query`
-- `retrieval.passage`
+Three route aliases serve the same Jina-shaped reranking contract:
 
-The underlying MLX model also accepts `classification`, `text-matching`, and `clustering` task prefixes. The service returns normalized dense float embeddings, so `normalized: true` and `embedding_type: "float"` are the supported values.
+```text
+POST /v1/rerank
+POST /jina/v1/rerank
+POST /openai/v1/rerank
+```
 
-## Dynamic Batching
+The `/openai/v1/rerank` route is a **local compatibility alias** that uses the same Jina-shaped request and response format. It does not implement an OpenAI-specific rerank schema.
 
-The server runs an async batching queue:
+### Rerank Request
+
+```bash
+curl http://127.0.0.1:8000/v1/rerank \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "jina-reranker-v3",
+    "query": "What is MLX?",
+    "documents": [
+      "MLX is an array framework optimized for Apple silicon.",
+      "A sourdough starter is a culture used for baking bread."
+    ],
+    "top_n": 1,
+    "return_documents": true
+  }'
+```
+
+Request fields:
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `query` | string | required | Non-empty query text |
+| `documents` | list[string] | required | Non-empty list of documents to rank |
+| `model` | string | null | Optional; accepts `jina-reranker-v3`, `jina-reranker-v3-mlx` |
+| `top_n` | int | null | Positive integer; omit to return all results |
+| `return_documents` | bool | true | Include document text in results |
+| `return_embeddings` | bool | false | Include document embeddings in results |
+
+Extra request fields are rejected.
+
+### Rerank Response
+
+```json
+{
+  "model": "jina-reranker-v3",
+  "object": "list",
+  "usage": {
+    "total_tokens": 17
+  },
+  "results": [
+    {
+      "index": 0,
+      "relevance_score": 0.93,
+      "document": "MLX is an array framework optimized for Apple silicon."
+    }
+  ]
+}
+```
+
+`usage.total_tokens` is counted locally using the reranker tokenizer.
+
+## Stats
+
+The service exposes operator-visible request counters and live queue state:
+
+```text
+GET /stats          (HTML page)
+GET /stats.json     (JSON snapshot)
+```
+
+```bash
+curl http://127.0.0.1:8000/stats.json
+```
+
+Example response:
+
+```json
+{
+  "embedding": {
+    "requests_1h": 12,
+    "requests_1d": 31,
+    "queued": 3,
+    "active": 4,
+    "unfinished": 7
+  },
+  "rerank": {
+    "requests_1h": 2,
+    "requests_1d": 9,
+    "queued": 1,
+    "active": 1,
+    "unfinished": 2
+  }
+}
+```
+
+- `requests_1h`: accepted requests in the last hour.
+- `requests_1d`: accepted requests in the last 24 hours.
+- `queued`: items waiting in queue.
+- `active`: items currently being processed.
+- `unfinished`: `queued + active` (operator-facing "not finished" count).
+
+Stats are in-memory only and reset when the process restarts.
+
+## Dynamic Batching (Embeddings)
+
+The server runs an async batching queue for embeddings:
 
 - Each input string becomes one queued embedding job.
 - The oldest job becomes the batch anchor.
@@ -172,9 +245,10 @@ The server runs an async batching queue:
 - Token length must be within `--length-tolerance` of the anchor, default `0.2`.
 - Batch size is capped by `--max-batch-size`, default `4`.
 - Total padded batch tokens are capped by `--max-batch-tokens`, default `8192`.
-- Results are returned to each original request in original input order.
 
-This keeps short queries from being padded up to a long document's sequence length.
+## Shared Inference Gate
+
+Both the embedding batcher and the rerank queue share a single process-local `asyncio.Lock` inference gate. Only one MLX model call enters inference at a time. This avoids contention on Apple Silicon GPU resources.
 
 ## OpenViking Configuration
 
@@ -195,10 +269,6 @@ OpenViking's `JinaDenseEmbedder` automatically sends `task=retrieval.query` for 
 }
 ```
 
-For another machine on the LAN, replace `127.0.0.1` with this Mac's IP address.
-
-If you use `dimension: 256` or `512`, keep OpenViking's `dimension` value in sync because it is used when creating the vector schema.
-
 ## macOS Background Service
 
 The repository includes a `launchd` plist at:
@@ -217,32 +287,24 @@ launchctl enable gui/$(id -u)/$LABEL
 launchctl kickstart -k gui/$(id -u)/$LABEL
 ```
 
-Check status:
-
-```bash
-launchctl print gui/$(id -u)/com.liyifan.jina-v5-mlx-embedding
-```
-
-Stop:
-
-```bash
-launchctl bootout gui/$(id -u)/com.liyifan.jina-v5-mlx-embedding
-```
-
 The plist in this repository contains absolute paths for the current machine. Update `WorkingDirectory`, log paths, and the `uv` path before using it elsewhere.
 
 ## Smoke Test
+
+Embedding:
 
 ```bash
 uv run python main.py embed --dim 256
 ```
 
-Expected shape:
+Reranking (requires model weights downloaded):
 
-```text
-embedding_dim=256
-0.xxxx  Machine learning lets computers learn patterns from data.
-0.xxxx  A sourdough starter is a culture used for baking bread.
+```bash
+uv run python -c "
+from jina_v5_mlx_demo.reranking import OfficialMLXRerankService
+service = OfficialMLXRerankService()
+print(service.rerank('What is MLX?', ['MLX runs on Apple silicon.'], top_n=1))
+"
 ```
 
 ## Security Notes

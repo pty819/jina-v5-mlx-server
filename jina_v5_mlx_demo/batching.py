@@ -28,6 +28,7 @@ class DynamicBatcher:
         batch_timeout_ms: int = 5,
         max_batch_tokens: int = 8192,
         length_tolerance: float = 0.2,
+        inference_gate: asyncio.Lock | None = None,
     ):
         if max_batch_size < 1:
             raise ValueError("max_batch_size must be >= 1")
@@ -43,6 +44,8 @@ class DynamicBatcher:
         self.batch_timeout = batch_timeout_ms / 1000
         self.max_batch_tokens = max_batch_tokens
         self.length_tolerance = length_tolerance
+        self.inference_gate = inference_gate or asyncio.Lock()
+        self._active_jobs = 0
         self._pending: list[BatchJob] = []
         self._condition = asyncio.Condition()
         self._worker_task: asyncio.Task | None = None
@@ -67,6 +70,15 @@ class DynamicBatcher:
             if not job.future.done():
                 job.future.cancel()
         self._pending.clear()
+
+    def queue_state(self) -> dict[str, int]:
+        queued = len(self._pending)
+        active = self._active_jobs
+        return {
+            "queued": queued,
+            "active": active,
+            "unfinished": queued + active,
+        }
 
     async def embed(self, texts: list[str], *, task_type: str, dimensions: int, max_length: int) -> list[list[float]]:
         await self.start()
@@ -148,20 +160,24 @@ class DynamicBatcher:
         return max_tokens * (len(batch) + 1) <= self.max_batch_tokens
 
     async def _process_batch(self, batch: list[BatchJob]):
+        self._active_jobs += len(batch)
         try:
             first = batch[0]
-            embeddings = await asyncio.to_thread(
-                self.embedding_service.embed,
-                [job.text for job in batch],
-                task_type=first.task_type,
-                dimensions=first.dimensions,
-                max_length=first.max_length,
-            )
+            async with self.inference_gate:
+                embeddings = await asyncio.to_thread(
+                    self.embedding_service.embed,
+                    [job.text for job in batch],
+                    task_type=first.task_type,
+                    dimensions=first.dimensions,
+                    max_length=first.max_length,
+                )
         except Exception as error:
             for job in batch:
                 if not job.future.done():
                     job.future.set_exception(error)
             return
+        finally:
+            self._active_jobs -= len(batch)
 
         for job, embedding in zip(batch, embeddings):
             if not job.future.done():

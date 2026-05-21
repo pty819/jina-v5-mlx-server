@@ -1,3 +1,4 @@
+import gc
 import importlib.util
 import json
 import threading
@@ -6,20 +7,28 @@ from pathlib import Path
 import mlx.core as mx
 from tokenizers import Tokenizer
 
+from jina_v5_mlx_demo.idle_evictor import IdleEvictor
+
 
 MODEL_ID = "jina-embeddings-v5-text-small"
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_MODEL_DIR = PROJECT_DIR / "models" / "jina-embeddings-v5-text-small-retrieval-mlx"
 
+DEFAULT_IDLE_SECONDS = 30 * 60
+
 
 class MLXEmbeddingService:
-    def __init__(self, model_dir: Path = DEFAULT_MODEL_DIR):
+    def __init__(self, model_dir: Path = DEFAULT_MODEL_DIR, *, idle_seconds: int = DEFAULT_IDLE_SECONDS):
         self.model_id = MODEL_ID
         self.model_dir = model_dir
         self._model = None
         self._tokenizer = None
         self._load_lock = threading.Lock()
         self._encode_lock = threading.Lock()
+        self._evictor = IdleEvictor(
+            evict=self._evict_model,
+            idle_seconds=idle_seconds,
+        )
 
     def embed(
         self,
@@ -30,6 +39,7 @@ class MLXEmbeddingService:
         max_length: int = 8192,
     ) -> list[list[float]]:
         model, tokenizer = self._load()
+        self._evictor.touch()
         with self._encode_lock:
             embeddings = model.encode(
                 texts,
@@ -43,6 +53,7 @@ class MLXEmbeddingService:
 
     def count_tokens(self, texts: list[str], task_type: str) -> int:
         _, tokenizer = self._load()
+        self._evictor.touch()
         prefix = {
             "retrieval.query": "Query: ",
             "retrieval.passage": "Document: ",
@@ -51,6 +62,15 @@ class MLXEmbeddingService:
             "clustering": "Document: ",
         }.get(task_type, "")
         return sum(len(tokenizer.encode(prefix + text).ids) for text in texts)
+
+    def _evict_model(self):
+        with self._load_lock:
+            if self._model is not None:
+                self._model = None
+                self._tokenizer = None
+                gc.collect()
+                mx.clear_cache()
+                mx.synchronize()
 
     def _load(self):
         if self._model is not None and self._tokenizer is not None:
@@ -84,4 +104,6 @@ class MLXEmbeddingService:
 
             self._model = model
             self._tokenizer = Tokenizer.from_file(str(model_dir / "tokenizer.json"))
+
+            self._evictor.start()
             return self._model, self._tokenizer
