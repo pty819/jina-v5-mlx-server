@@ -108,6 +108,28 @@ class DynamicBatcherTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(batcher.queue_state()["unfinished"], 0)
         await batcher.stop()
 
+    async def test_rejects_single_job_larger_than_batch_token_budget(self):
+        batcher = DynamicBatcher(
+            self.service,
+            max_batch_size=1,
+            batch_timeout_ms=0,
+            max_batch_tokens=4,
+        )
+
+        with self.assertRaisesRegex(ValueError, "max_batch_tokens"):
+            await asyncio.wait_for(
+                batcher.embed(
+                    ["5"],
+                    task_type="retrieval.passage",
+                    dimensions=32,
+                    max_length=8192,
+                ),
+                timeout=0.1,
+            )
+
+        self.assertEqual(batcher.queue_state()["unfinished"], 0)
+        await batcher.stop()
+
 
 if __name__ == "__main__":
     unittest.main()

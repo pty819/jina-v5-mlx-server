@@ -10,11 +10,8 @@ from jina_v5_mlx_demo.batching import DynamicBatcher
 from jina_v5_mlx_demo.metrics import RequestMetrics
 from jina_v5_mlx_demo.rerank_queue import RerankQueue
 from jina_v5_mlx_demo.routes import (
-    jina_router,
-    openai_router,
     register_embedding_routes,
     register_rerank_routes,
-    utils_router,
 )
 from jina_v5_mlx_demo.schema import RequestError, parse_max_length
 
@@ -48,6 +45,10 @@ def create_app(
         else None
     )
     metrics = metrics or RequestMetrics()
+
+    openai_router = APIRouter(prefix="/openai/v1")
+    jina_router = APIRouter(prefix="/jina/v1")
+    utils_router = APIRouter()
 
     # --- OpenAI group ---
     register_embedding_routes(openai_router, embedding_service, batcher, metrics, default_max_length, tags=["OpenAI"])

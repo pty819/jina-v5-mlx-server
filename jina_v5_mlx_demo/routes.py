@@ -1,5 +1,3 @@
-from fastapi import APIRouter
-
 from jina_v5_mlx_demo.schema import (
     EmbeddingRequest,
     RerankRequest,
@@ -9,10 +7,6 @@ from jina_v5_mlx_demo.schema import (
     parse_max_length,
     parse_task_type,
 )
-
-openai_router = APIRouter(prefix="/openai/v1")
-jina_router = APIRouter(prefix="/jina/v1")
-utils_router = APIRouter()
 
 
 def register_embedding_routes(router, embedding_service, batcher, metrics, default_max_length, *, tags=None):

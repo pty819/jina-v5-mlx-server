@@ -315,6 +315,20 @@ class CombinedServerTest(unittest.TestCase):
         self.assertEqual(body["embedding_model"], "fake-embedding-model")
         self.assertEqual(body["rerank_model"], "jina-reranker-v3")
 
+    def test_create_app_does_not_reuse_registered_routes(self):
+        first_app = create_app(FakeEmbeddingService(), rerank_service=FakeRerankService())
+        second_app = create_app(FakeEmbeddingService(), rerank_service=FakeRerankService())
+
+        first_paths = [route.path for route in first_app.routes]
+        second_paths = [route.path for route in second_app.routes]
+
+        self.assertEqual(first_paths.count("/openai/v1/embeddings"), 1)
+        self.assertEqual(second_paths.count("/openai/v1/embeddings"), 1)
+        self.assertEqual(first_paths.count("/openai/v1/rerank"), 1)
+        self.assertEqual(second_paths.count("/openai/v1/rerank"), 1)
+        self.assertEqual(first_paths.count("/health"), 1)
+        self.assertEqual(second_paths.count("/health"), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

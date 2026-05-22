@@ -84,17 +84,25 @@ class DynamicBatcher:
         await self.start()
         loop = asyncio.get_running_loop()
         jobs = []
+        prepared = []
+
+        for text in texts:
+            token_count = min(self.embedding_service.count_tokens([text], task_type), max_length)
+            if token_count > self.max_batch_tokens:
+                raise ValueError(
+                    f"input token count {token_count} exceeds max_batch_tokens={self.max_batch_tokens}"
+                )
+            prepared.append((text, token_count))
 
         async with self._condition:
-            for text in texts:
-                token_count = self.embedding_service.count_tokens([text], task_type)
+            for text, token_count in prepared:
                 future = loop.create_future()
                 job = BatchJob(
                     text=text,
                     task_type=task_type,
                     dimensions=dimensions,
                     max_length=max_length,
-                    token_count=min(token_count, max_length),
+                    token_count=token_count,
                     future=future,
                 )
                 jobs.append(job)
