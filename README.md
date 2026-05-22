@@ -245,6 +245,8 @@ The server runs an async batching queue for embeddings:
 - Token length must be within `--length-tolerance` of the anchor, default `0.2`.
 - Batch size is capped by `--max-batch-size`, default `4`.
 - Total padded batch tokens are capped by `--max-batch-tokens`, default `8192`.
+- A single input whose truncated token count exceeds `--max-batch-tokens` is rejected
+  before it enters the queue.
 
 ## Shared Inference Gate
 
@@ -252,7 +254,9 @@ Both the embedding batcher and the rerank queue share a single process-local `as
 
 ## OpenViking Configuration
 
-OpenViking's `JinaDenseEmbedder` automatically sends `task=retrieval.query` for queries and `task=retrieval.passage` for indexing:
+OpenViking can use this server for both dense embeddings and reranking.
+`JinaDenseEmbedder` sends Jina query/passage tasks for embeddings, while the
+reranker uses OpenViking's OpenAI-compatible rerank provider:
 
 ```json
 {
@@ -265,9 +269,32 @@ OpenViking's `JinaDenseEmbedder` automatically sends `task=retrieval.query` for 
       "dimension": 1024
     },
     "max_concurrent": 10
+  },
+  "rerank": {
+    "provider": "openai",
+    "api_key": "local",
+    "api_base": "http://127.0.0.1:8000/openai/v1/rerank",
+    "model": "jina-reranker-v3",
+    "threshold": 0.1
   }
 }
 ```
+
+Use an address reachable from the OpenViking process. If OpenViking runs on a
+different machine or container, replace `127.0.0.1` with this Mac's LAN address
+or reverse-proxy hostname.
+
+The two `api_base` fields intentionally have different shapes:
+
+- Embedding `api_base` is a base URL such as `http://127.0.0.1:8000/v1`.
+- Rerank `api_base` is the full endpoint URL. Use
+  `http://127.0.0.1:8000/openai/v1/rerank` or
+  `http://127.0.0.1:8000/v1/rerank`, not just an `/openai/v1` base.
+
+OpenViking's rerank client sends `model`, `query`, and `documents`, then reads
+`results[].index` and `results[].relevance_score`. This server returns that
+contract from every rerank alias. Leave `top_n` unset for OpenViking so every
+input document receives a score.
 
 ## macOS Background Service
 
