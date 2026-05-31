@@ -58,6 +58,44 @@ class RerankRequest(BaseModel):
         return self
 
 
+class ChatMessage(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    role: str
+    content: str | list[dict] | None = ""
+
+
+class ChatCompletionRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    messages: list[ChatMessage]
+    model: str | None = None
+    max_tokens: int = 256
+    temperature: float = 0.7
+    top_p: float = 1.0
+    stream: bool = False
+    stop: str | list[str] | None = None
+
+    @model_validator(mode="after")
+    def validate_request(self):
+        if not self.messages:
+            raise ValueError("messages must be a non-empty list")
+        for message in self.messages:
+            if message.role not in {"system", "user", "assistant", "tool"}:
+                raise ValueError("message role must be one of system, user, assistant, tool")
+        if self.max_tokens < 1:
+            raise ValueError("max_tokens must be a positive integer")
+        if self.temperature < 0:
+            raise ValueError("temperature must be >= 0")
+        if not 0 <= self.top_p <= 1:
+            raise ValueError("top_p must be between 0 and 1")
+        if self.stream is True:
+            raise ValueError("stream=true is not supported")
+        if isinstance(self.stop, list) and not all(isinstance(item, str) for item in self.stop):
+            raise ValueError("stop must be a string or a list of strings")
+        return self
+
+
 VALID_TASK_TYPES = {
     "retrieval.query",
     "retrieval.passage",

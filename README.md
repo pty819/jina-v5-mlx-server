@@ -1,8 +1,8 @@
 # Jina v5 MLX Server
 
-FastAPI serving for `jinaai/jina-embeddings-v5-text-small-retrieval-mlx` embeddings and `jinaai/jina-reranker-v3-mlx` reranking on Apple Silicon with MLX.
+FastAPI serving for `jinaai/jina-embeddings-v5-text-small-retrieval-mlx` embeddings, `jinaai/jina-reranker-v3-mlx` reranking, and `mlx-community/Hy-MT2-1.8B-4bit` chat completions on Apple Silicon with MLX.
 
-The server provides embedding and reranking endpoints from a single local process, with dynamic batching for embeddings, request-level reranking, and operator stats.
+The server provides embedding, reranking, and OpenAI-style chat completion endpoints from a single local process, with dynamic batching for embeddings, request-level queues for rerank/chat, idle model unloading, and operator stats.
 
 ## Features
 
@@ -15,10 +15,14 @@ The server provides embedding and reranking endpoints from a single local proces
   - `POST /v1/rerank`
   - `POST /jina/v1/rerank`
   - `POST /openai/v1/rerank` (local Jina-shaped compatibility alias)
+- **Chat completion endpoints:**
+  - `POST /v1/chat/completions`
+  - `POST /openai/v1/chat/completions`
 - Jina task routing for embeddings: `retrieval.query` and `retrieval.passage`.
 - Matryoshka output dimensions: `32`, `64`, `128`, `256`, `512`, `768`, `1024`.
 - Dynamic batching with token-length bucketing for embeddings.
 - Request-level rerank queue with shared MLX inference gate.
+- Request-level chat completion queue with shared MLX inference gate.
 - Operator stats: `GET /stats` (HTML) and `GET /stats.json`.
 - Optional macOS `launchd` background service.
 
@@ -28,6 +32,7 @@ The server provides embedding and reranking endpoints from a single local proces
 - Python managed by `uv`.
 - About 1.2 GB for embedding model weights.
 - About 600 MB for reranker model weights.
+- About 1.1 GB for Hy-MT2 1.8B 4-bit chat model weights.
 
 ## Setup
 
@@ -39,6 +44,9 @@ uv run hf download jinaai/jina-embeddings-v5-text-small-retrieval-mlx \
 
 uv run hf download jinaai/jina-reranker-v3-mlx \
   --local-dir models/jina-reranker-v3-mlx
+
+uv run hf download mlx-community/Hy-MT2-1.8B-4bit \
+  --local-dir models/Hy-MT2-1.8B-4bit
 ```
 
 The `models/` directory is ignored by Git.
@@ -46,7 +54,9 @@ The `models/` directory is ignored by Git.
 ## Run
 
 ```bash
-uv run python main.py serve \
+uv run python main.py \
+  --chat-model-dir models/Hy-MT2-1.8B-4bit \
+  serve \
   --host 127.0.0.1 \
   --port 8000 \
   --max-batch-size 4 \
@@ -62,6 +72,7 @@ Override model directories:
 uv run python main.py \
   --model-dir /path/to/embedding-model \
   --reranker-dir /path/to/reranker-model \
+  --chat-model-dir /path/to/Hy-MT2-1.8B-4bit \
   serve --host 0.0.0.0 --port 8000
 ```
 
@@ -193,6 +204,63 @@ Extra request fields are rejected.
 
 `usage.total_tokens` is counted locally using the reranker tokenizer.
 
+## Chat Completion Endpoints
+
+Two route aliases serve the same OpenAI-style non-streaming chat completion contract:
+
+```text
+POST /v1/chat/completions
+POST /openai/v1/chat/completions
+```
+
+The chat model is loaded lazily on the first chat request and unloaded after
+`--idle-seconds` of inactivity. Requests are queued and enter the same shared
+MLX inference gate as embeddings and reranking.
+
+```bash
+curl http://127.0.0.1:8000/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "mlx-community/Hy-MT2-1.8B-4bit",
+    "messages": [
+      {"role": "system", "content": "You are a concise assistant."},
+      {"role": "user", "content": "Translate this into English: 今天天气真好。"}
+    ],
+    "max_tokens": 128,
+    "temperature": 0.7,
+    "top_p": 0.6
+  }'
+```
+
+Response shape:
+
+```json
+{
+  "id": "chatcmpl-...",
+  "object": "chat.completion",
+  "created": 1770000000,
+  "model": "mlx-community/Hy-MT2-1.8B-4bit",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "The weather is really nice today."
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 32,
+    "completion_tokens": 9,
+    "total_tokens": 41
+  }
+}
+```
+
+`stream=true`, tool calls, vision content, and logprobs are not implemented.
+Multi-turn text message arrays are supported.
+
 ## Stats
 
 The service exposes operator-visible request counters and live queue state:
@@ -250,7 +318,9 @@ The server runs an async batching queue for embeddings:
 
 ## Shared Inference Gate
 
-Both the embedding batcher and the rerank queue share a single process-local `asyncio.Lock` inference gate. Only one MLX model call enters inference at a time. This avoids contention on Apple Silicon GPU resources.
+The embedding batcher, rerank queue, and chat completion queue share a single
+process-local `asyncio.Lock` inference gate. Only one MLX model call enters
+inference at a time. This avoids contention on Apple Silicon GPU resources.
 
 ## OpenViking Configuration
 

@@ -14,6 +14,8 @@
     <string>run</string>
     <string>python</string>
     <string>main.py</string>
+    <string>--chat-model-dir</string>
+    <string>/Users/liyifan/Documents/Codex/2026-05-19/mlx-mac-jinaai-jina-embeddings-v5/jina-v5-mlx-demo/models/Hy-MT2-1.8B-4bit</string>
     <string>serve</string>
     <string>--host</string>
     <string>0.0.0.0</string>

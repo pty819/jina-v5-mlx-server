@@ -118,6 +118,8 @@ class OfficialMLXRerankService:
                 "jina_mlx_reranker",
                 rerank_py,
             )
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Cannot load reranker implementation from {rerank_py}")
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
             raw = module.MLXReranker(

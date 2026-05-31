@@ -4,19 +4,20 @@ from dataclasses import dataclass
 
 
 @dataclass
-class RerankJob:
-    query: str
-    documents: list[str]
-    top_n: int | None
-    return_embeddings: bool
+class ChatJob:
+    messages: list[dict]
+    max_tokens: int
+    temperature: float
+    top_p: float
+    stop: str | list[str] | None
     future: asyncio.Future | None = None
 
 
-class RerankQueue:
-    def __init__(self, rerank_service, *, inference_gate: asyncio.Lock):
-        self.rerank_service = rerank_service
+class ChatQueue:
+    def __init__(self, chat_service, *, inference_gate: asyncio.Lock):
+        self.chat_service = chat_service
         self.inference_gate = inference_gate
-        self._pending: list[RerankJob] = []
+        self._pending: list[ChatJob] = []
         self._condition = asyncio.Condition()
         self._worker_task: asyncio.Task | None = None
         self._active_jobs = 0
@@ -25,7 +26,7 @@ class RerankQueue:
     async def start(self):
         if self._worker_task is None:
             self._stopping = False
-            self._worker_task = asyncio.create_task(self._run(), name="rerank-queue-worker")
+            self._worker_task = asyncio.create_task(self._run(), name="chat-queue-worker")
 
     async def stop(self):
         self._stopping = True
@@ -41,22 +42,24 @@ class RerankQueue:
                 job.future.cancel()
         self._pending.clear()
 
-    async def rerank(
+    async def complete(
         self,
-        query: str,
-        documents: list[str],
+        messages: list[dict],
         *,
-        top_n: int | None = None,
-        return_embeddings: bool = False,
+        max_tokens: int,
+        temperature: float,
+        top_p: float,
+        stop: str | list[str] | None,
     ):
         await self.start()
         loop = asyncio.get_running_loop()
         future = loop.create_future()
-        job = RerankJob(
-            query=query,
-            documents=documents,
-            top_n=top_n,
-            return_embeddings=return_embeddings,
+        job = ChatJob(
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            stop=stop,
             future=future,
         )
         async with self._condition:
@@ -80,7 +83,7 @@ class RerankQueue:
                 continue
             await self._process_job(job)
 
-    async def _next_job(self) -> RerankJob | None:
+    async def _next_job(self) -> ChatJob | None:
         async with self._condition:
             while not self._pending and not self._stopping:
                 await self._condition.wait()
@@ -88,16 +91,17 @@ class RerankQueue:
                 return None
             return self._pending.pop(0)
 
-    async def _process_job(self, job: RerankJob):
+    async def _process_job(self, job: ChatJob):
         self._active_jobs += 1
         try:
             async with self.inference_gate:
                 result = await asyncio.to_thread(
-                    self.rerank_service.rerank,
-                    job.query,
-                    job.documents,
-                    top_n=job.top_n,
-                    return_embeddings=job.return_embeddings,
+                    self.chat_service.complete,
+                    job.messages,
+                    max_tokens=job.max_tokens,
+                    temperature=job.temperature,
+                    top_p=job.top_p,
+                    stop=job.stop,
                 )
             future = job.future
             if future is not None and not future.done():

@@ -1,6 +1,6 @@
 import unittest
 
-from jina_v5_mlx_demo.reranking import RerankResult, RerankResponse, OfficialMLXRerankService
+from jina_v5_mlx_demo.reranking import OfficialMLXRerankService
 
 
 class FakeRawReranker:

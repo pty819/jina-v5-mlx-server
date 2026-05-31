@@ -3,6 +3,7 @@ from pathlib import Path
 
 import uvicorn
 
+from jina_v5_mlx_demo.chat import DEFAULT_CHAT_MODEL_DIR, MLXChatService
 from jina_v5_mlx_demo.modeling import DEFAULT_MODEL_DIR, MLXEmbeddingService
 from jina_v5_mlx_demo.reranking import DEFAULT_RERANKER_DIR, OfficialMLXRerankService
 from jina_v5_mlx_demo.server import create_app
@@ -40,19 +41,26 @@ def run_embed(args):
 def run_serve(args):
     embedding_service = MLXEmbeddingService(args.model_dir, idle_seconds=args.idle_seconds)
     rerank_service = OfficialMLXRerankService(args.reranker_dir, idle_seconds=args.idle_seconds)
+    chat_service = MLXChatService(args.chat_model_dir, idle_seconds=args.idle_seconds)
     app = create_app(
         embedding_service,
         rerank_service=rerank_service,
+        chat_service=chat_service,
         max_batch_size=args.max_batch_size,
         batch_timeout_ms=args.batch_timeout_ms,
         max_batch_tokens=args.max_batch_tokens,
         length_tolerance=args.length_tolerance,
         default_max_length=args.max_length,
     )
-    print(f"Serving embeddings ({embedding_service.model_id}) and reranking ({rerank_service.model_id})")
+    print(
+        "Serving embeddings "
+        f"({embedding_service.model_id}), reranking ({rerank_service.model_id}), "
+        f"and chat ({chat_service.model_id})"
+    )
     print(f"  http://{args.host}:{args.port}")
     print("  POST /v1/embeddings, /openai/v1/embeddings, /jina/v1/embeddings")
     print("  POST /v1/rerank, /jina/v1/rerank, /openai/v1/rerank")
+    print("  POST /v1/chat/completions, /openai/v1/chat/completions")
     print("  GET  /stats, /stats.json")
     uvicorn.run(app, host=args.host, port=args.port)
 
@@ -61,6 +69,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-dir", type=str, default=str(DEFAULT_MODEL_DIR))
     parser.add_argument("--reranker-dir", type=str, default=str(DEFAULT_RERANKER_DIR))
+    parser.add_argument("--chat-model-dir", type=str, default=str(DEFAULT_CHAT_MODEL_DIR))
     subparsers = parser.add_subparsers(dest="command")
     parser.set_defaults(
         func=run_embed,
@@ -95,6 +104,7 @@ def main():
     args = parser.parse_args()
     args.model_dir = Path(args.model_dir)
     args.reranker_dir = Path(args.reranker_dir)
+    args.chat_model_dir = Path(args.chat_model_dir)
     args.func(args)
 
 

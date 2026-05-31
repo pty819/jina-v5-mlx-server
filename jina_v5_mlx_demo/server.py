@@ -7,9 +7,11 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from jina_v5_mlx_demo.batching import DynamicBatcher
+from jina_v5_mlx_demo.chat_queue import ChatQueue
 from jina_v5_mlx_demo.metrics import RequestMetrics
 from jina_v5_mlx_demo.rerank_queue import RerankQueue
 from jina_v5_mlx_demo.routes import (
+    register_chat_routes,
     register_embedding_routes,
     register_rerank_routes,
 )
@@ -20,6 +22,7 @@ def create_app(
     embedding_service,
     *,
     rerank_service=None,
+    chat_service=None,
     metrics=None,
     max_batch_size: int = 4,
     batch_timeout_ms: int = 5,
@@ -44,6 +47,11 @@ def create_app(
         if rerank_service is not None
         else None
     )
+    chat_queue = (
+        ChatQueue(chat_service, inference_gate=inference_gate)
+        if chat_service is not None
+        else None
+    )
     metrics = metrics or RequestMetrics()
 
     openai_router = APIRouter(prefix="/openai/v1")
@@ -54,6 +62,8 @@ def create_app(
     register_embedding_routes(openai_router, embedding_service, batcher, metrics, default_max_length, tags=["OpenAI"])
     if rerank_service is not None:
         register_rerank_routes(openai_router, rerank_service, rerank_queue, metrics, tags=["OpenAI"])
+    if chat_service is not None:
+        register_chat_routes(openai_router, chat_service, chat_queue, tags=["OpenAI"])
 
     # --- Jina group ---
     register_embedding_routes(jina_router, embedding_service, batcher, metrics, default_max_length, tags=["Jina"])
@@ -65,6 +75,8 @@ def create_app(
     register_embedding_routes(v1_router, embedding_service, batcher, metrics, default_max_length, tags=["v1"])
     if rerank_service is not None:
         register_rerank_routes(v1_router, rerank_service, rerank_queue, metrics, tags=["v1"])
+    if chat_service is not None:
+        register_chat_routes(v1_router, chat_service, chat_queue, tags=["v1"])
 
     # --- Utils group ---
     @utils_router.get("/health", tags=["Utils"], summary="Health check")
@@ -74,6 +86,8 @@ def create_app(
             result["rerank_model"] = rerank_service.model_id
         else:
             result["model"] = embedding_service.model_id
+        if chat_service is not None:
+            result["chat_model"] = chat_service.model_id
         return result
 
     @utils_router.get("/stats.json", tags=["Utils"], summary="Stats JSON")
@@ -98,12 +112,18 @@ def create_app(
         await batcher.start()
         if rerank_queue is not None:
             await rerank_queue.start()
+        if chat_queue is not None:
+            await chat_queue.start()
         try:
             yield
         finally:
+            if chat_queue is not None:
+                await chat_queue.stop()
             if rerank_queue is not None:
                 await rerank_queue.stop()
             await batcher.stop()
+            if chat_service is not None and hasattr(chat_service, "close"):
+                chat_service.close()
 
     app = FastAPI(
         title="Jina v5 MLX Server",

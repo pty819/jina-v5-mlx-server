@@ -42,6 +42,25 @@ class FakeRerankService:
         )
 
 
+class FakeChatService:
+    model_id = "fake-chat-model"
+
+    def complete(self, messages, *, max_tokens, temperature, top_p, stop):
+        self.last_call = {
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "top_p": top_p,
+            "stop": stop,
+        }
+        return {
+            "content": f"reply:{messages[-1]['content']}",
+            "prompt_tokens": 5,
+            "completion_tokens": 3,
+            "finish_reason": "stop",
+        }
+
+
 class EmbeddingServerTest(unittest.TestCase):
     def setUp(self):
         self.service = FakeEmbeddingService()
@@ -164,8 +183,13 @@ class CombinedServerTest(unittest.TestCase):
     def setUp(self):
         self.embedding_service = FakeEmbeddingService()
         self.rerank_service = FakeRerankService()
+        self.chat_service = FakeChatService()
         self.client = TestClient(
-            create_app(self.embedding_service, rerank_service=self.rerank_service)
+            create_app(
+                self.embedding_service,
+                rerank_service=self.rerank_service,
+                chat_service=self.chat_service,
+            )
         )
 
     def test_jina_style_rerank_endpoint(self):
@@ -314,18 +338,83 @@ class CombinedServerTest(unittest.TestCase):
         body = response.json()
         self.assertEqual(body["embedding_model"], "fake-embedding-model")
         self.assertEqual(body["rerank_model"], "jina-reranker-v3")
+        self.assertEqual(body["chat_model"], "fake-chat-model")
+
+    def test_openai_chat_completions_endpoint(self):
+        response = self.client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "fake-chat-model",
+                "messages": [
+                    {"role": "system", "content": "Be concise."},
+                    {"role": "user", "content": "hello"},
+                ],
+                "max_tokens": 32,
+                "temperature": 0.2,
+                "top_p": 0.9,
+                "stop": ["END"],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["object"], "chat.completion")
+        self.assertEqual(body["model"], "fake-chat-model")
+        self.assertEqual(body["choices"][0]["message"]["role"], "assistant")
+        self.assertEqual(body["choices"][0]["message"]["content"], "reply:hello")
+        self.assertEqual(body["choices"][0]["finish_reason"], "stop")
+        self.assertEqual(body["usage"]["prompt_tokens"], 5)
+        self.assertEqual(body["usage"]["completion_tokens"], 3)
+        self.assertEqual(body["usage"]["total_tokens"], 8)
+        self.assertEqual(self.chat_service.last_call["max_tokens"], 32)
+        self.assertEqual(self.chat_service.last_call["temperature"], 0.2)
+        self.assertEqual(self.chat_service.last_call["top_p"], 0.9)
+        self.assertEqual(self.chat_service.last_call["stop"], ["END"])
+
+    def test_openai_chat_alias_endpoint(self):
+        response = self.client.post(
+            "/openai/v1/chat/completions",
+            json={
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["choices"][0]["message"]["content"], "reply:hello")
+
+    def test_rejects_streaming_chat_requests(self):
+        response = self.client.post(
+            "/v1/chat/completions",
+            json={
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": True,
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("stream=true is not supported", response.json()["error"]["message"])
 
     def test_create_app_does_not_reuse_registered_routes(self):
-        first_app = create_app(FakeEmbeddingService(), rerank_service=FakeRerankService())
-        second_app = create_app(FakeEmbeddingService(), rerank_service=FakeRerankService())
+        first_app = create_app(
+            FakeEmbeddingService(),
+            rerank_service=FakeRerankService(),
+            chat_service=FakeChatService(),
+        )
+        second_app = create_app(
+            FakeEmbeddingService(),
+            rerank_service=FakeRerankService(),
+            chat_service=FakeChatService(),
+        )
 
-        first_paths = [route.path for route in first_app.routes]
-        second_paths = [route.path for route in second_app.routes]
+        first_paths = [getattr(route, "path", None) for route in first_app.routes]
+        second_paths = [getattr(route, "path", None) for route in second_app.routes]
 
         self.assertEqual(first_paths.count("/openai/v1/embeddings"), 1)
         self.assertEqual(second_paths.count("/openai/v1/embeddings"), 1)
         self.assertEqual(first_paths.count("/openai/v1/rerank"), 1)
         self.assertEqual(second_paths.count("/openai/v1/rerank"), 1)
+        self.assertEqual(first_paths.count("/openai/v1/chat/completions"), 1)
+        self.assertEqual(second_paths.count("/openai/v1/chat/completions"), 1)
         self.assertEqual(first_paths.count("/health"), 1)
         self.assertEqual(second_paths.count("/health"), 1)
 

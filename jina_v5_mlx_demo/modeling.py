@@ -100,6 +100,8 @@ class MLXEmbeddingService:
 
             model = model_module.JinaEmbeddingModel(config)
             weights = mx.load(str(model_dir / "model.safetensors"))
+            if not isinstance(weights, dict):
+                raise RuntimeError(f"Expected safetensors dict from {model_dir / 'model.safetensors'}")
             model.load_weights(list(weights.items()))
 
             self._model = model
