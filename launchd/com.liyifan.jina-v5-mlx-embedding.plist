@@ -6,33 +6,12 @@
   <string>com.liyifan.jina-v5-mlx-embedding</string>
 
   <key>WorkingDirectory</key>
-  <string>/Users/liyifan/Documents/Codex/2026-05-19/mlx-mac-jinaai-jina-embeddings-v5/jina-v5-mlx-demo</string>
+  <string>/tmp</string>
 
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/liyifan/.local/bin/uv</string>
-    <string>run</string>
-    <string>python</string>
-    <string>main.py</string>
-    <string>serve</string>
-    <string>--host</string>
-    <string>0.0.0.0</string>
-    <string>--port</string>
-    <string>8000</string>
-    <string>--max-batch-size</string>
-    <string>4</string>
-    <string>--batch-timeout-ms</string>
-    <string>5</string>
-    <string>--max-batch-tokens</string>
-    <string>8192</string>
-    <string>--length-tolerance</string>
-    <string>0.2</string>
-    <string>--max-length</string>
-    <string>8192</string>
-    <string>--chat-upstream-base-url</string>
-    <string>http://127.0.0.1:8001/v1</string>
-    <string>--chat-upstream-model</string>
-    <string>mlx-community/Hy-MT2-1.8B-4bit</string>
+    <string>/bin/zsh</string>
+    <string>/Users/liyifan/Library/Application Support/jina-v5-mlx-server/current/launchd/start-jina-gateway.sh</string>
   </array>
 
   <key>EnvironmentVariables</key>
@@ -41,6 +20,12 @@
     <string>/Users/liyifan/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     <key>PYTHONUNBUFFERED</key>
     <string>1</string>
+    <key>HOME</key>
+    <string>/Users/liyifan</string>
+    <key>HF_HOME</key>
+    <string>/Users/liyifan/.cache/huggingface</string>
+    <key>UV_CACHE_DIR</key>
+    <string>/Users/liyifan/.cache/uv</string>
   </dict>
 
   <key>RunAtLoad</key>
@@ -50,9 +35,9 @@
   <true/>
 
   <key>StandardOutPath</key>
-  <string>/Users/liyifan/Documents/Codex/2026-05-19/mlx-mac-jinaai-jina-embeddings-v5/jina-v5-mlx-demo/logs/embedding-service.out.log</string>
+  <string>/Users/liyifan/Library/Logs/jina-v5-mlx-server/gateway.out.log</string>
 
   <key>StandardErrorPath</key>
-  <string>/Users/liyifan/Documents/Codex/2026-05-19/mlx-mac-jinaai-jina-embeddings-v5/jina-v5-mlx-demo/logs/embedding-service.err.log</string>
+  <string>/Users/liyifan/Library/Logs/jina-v5-mlx-server/gateway.err.log</string>
 </dict>
 </plist>

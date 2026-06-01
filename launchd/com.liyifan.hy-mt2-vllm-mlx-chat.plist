@@ -6,28 +6,12 @@
   <string>com.liyifan.hy-mt2-vllm-mlx-chat</string>
 
   <key>WorkingDirectory</key>
-  <string>/Users/liyifan/Documents/Codex/2026-05-19/mlx-mac-jinaai-jina-embeddings-v5/jina-v5-mlx-demo</string>
+  <string>/tmp</string>
 
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/liyifan/.local/bin/vllm-mlx</string>
-    <string>serve</string>
-    <string>models/Hy-MT2-1.8B-4bit</string>
-    <string>--served-model-name</string>
-    <string>mlx-community/Hy-MT2-1.8B-4bit</string>
-    <string>--host</string>
-    <string>127.0.0.1</string>
-    <string>--port</string>
-    <string>8001</string>
-    <string>--continuous-batching</string>
-    <string>--enable-prefix-cache</string>
-    <string>--use-paged-cache</string>
-    <string>--stream-interval</string>
-    <string>1</string>
-    <string>--max-tokens</string>
-    <string>4096</string>
-    <string>--max-request-tokens</string>
-    <string>4096</string>
+    <string>/bin/zsh</string>
+    <string>/Users/liyifan/Library/Application Support/jina-v5-mlx-server/current/launchd/start-vllm-mlx-chat.sh</string>
   </array>
 
   <key>EnvironmentVariables</key>
@@ -36,6 +20,12 @@
     <string>/Users/liyifan/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     <key>PYTHONUNBUFFERED</key>
     <string>1</string>
+    <key>HOME</key>
+    <string>/Users/liyifan</string>
+    <key>HF_HOME</key>
+    <string>/Users/liyifan/.cache/huggingface</string>
+    <key>UV_CACHE_DIR</key>
+    <string>/Users/liyifan/.cache/uv</string>
   </dict>
 
   <key>RunAtLoad</key>
@@ -45,9 +35,9 @@
   <true/>
 
   <key>StandardOutPath</key>
-  <string>/Users/liyifan/Documents/Codex/2026-05-19/mlx-mac-jinaai-jina-embeddings-v5/jina-v5-mlx-demo/logs/chat-vllm-mlx.out.log</string>
+  <string>/Users/liyifan/Library/Logs/jina-v5-mlx-server/chat-vllm-mlx.out.log</string>
 
   <key>StandardErrorPath</key>
-  <string>/Users/liyifan/Documents/Codex/2026-05-19/mlx-mac-jinaai-jina-embeddings-v5/jina-v5-mlx-demo/logs/chat-vllm-mlx.err.log</string>
+  <string>/Users/liyifan/Library/Logs/jina-v5-mlx-server/chat-vllm-mlx.err.log</string>
 </dict>
 </plist>

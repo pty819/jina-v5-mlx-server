@@ -516,11 +516,44 @@ launchd/com.liyifan.hy-mt2-vllm-mlx-chat.plist      # vllm-mlx chat backend on 1
 launchd/com.liyifan.jina-v5-mlx-embedding.plist     # gateway + embedding/rerank on 0.0.0.0:8000
 ```
 
+They are intentionally separate services. The gateway does not launch
+`vllm-mlx`; it only forwards `/v1/chat/completions` to
+`http://127.0.0.1:8001/v1`.
+
+The plists call these scripts:
+
+```text
+launchd/start-vllm-mlx-chat.sh
+launchd/start-jina-gateway.sh
+```
+
+The scripts use absolute paths and run with `WorkingDirectory=/tmp`. They are
+installed under `~/Library/Application Support/jina-v5-mlx-server/current`
+because macOS LaunchAgents can hang or fail when opening files under protected
+user folders such as `Documents/`.
+
+Create/update the runtime copy:
+
+```bash
+RUNTIME_DIR="$HOME/Library/Application Support/jina-v5-mlx-server/current"
+mkdir -p "$RUNTIME_DIR" ~/Library/Logs/jina-v5-mlx-server
+rsync -a --delete \
+  --exclude .git \
+  --exclude .omx \
+  --exclude .pytest_cache \
+  --exclude __pycache__ \
+  ./ "$RUNTIME_DIR"/
+chmod +x "$RUNTIME_DIR"/launchd/start-vllm-mlx-chat.sh \
+  "$RUNTIME_DIR"/launchd/start-jina-gateway.sh
+```
+
 Install the chat backend first:
 
 ```bash
 CHAT_LABEL=com.liyifan.hy-mt2-vllm-mlx-chat
-cp launchd/$CHAT_LABEL.plist ~/Library/LaunchAgents/$CHAT_LABEL.plist
+RUNTIME_DIR="$HOME/Library/Application Support/jina-v5-mlx-server/current"
+launchctl bootout gui/$(id -u)/$CHAT_LABEL 2>/dev/null || true
+cp "$RUNTIME_DIR"/launchd/$CHAT_LABEL.plist ~/Library/LaunchAgents/$CHAT_LABEL.plist
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/$CHAT_LABEL.plist
 launchctl enable gui/$(id -u)/$CHAT_LABEL
 launchctl kickstart -k gui/$(id -u)/$CHAT_LABEL
@@ -530,13 +563,34 @@ Install the gateway after the chat backend:
 
 ```bash
 LABEL=com.liyifan.jina-v5-mlx-embedding
-cp launchd/$LABEL.plist ~/Library/LaunchAgents/$LABEL.plist
+RUNTIME_DIR="$HOME/Library/Application Support/jina-v5-mlx-server/current"
+launchctl bootout gui/$(id -u)/$LABEL 2>/dev/null || true
+cp "$RUNTIME_DIR"/launchd/$LABEL.plist ~/Library/LaunchAgents/$LABEL.plist
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/$LABEL.plist
 launchctl enable gui/$(id -u)/$LABEL
 launchctl kickstart -k gui/$(id -u)/$LABEL
 ```
 
-The plists in this repository contain absolute paths for the current machine. Update `WorkingDirectory`, log paths, the `uv` path, and the `vllm-mlx` path before using them elsewhere.
+Verify:
+
+```bash
+curl http://127.0.0.1:8001/v1/models
+curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8000/v1/models
+```
+
+Logs:
+
+```text
+~/Library/Logs/jina-v5-mlx-server/chat-vllm-mlx.out.log
+~/Library/Logs/jina-v5-mlx-server/chat-vllm-mlx.err.log
+~/Library/Logs/jina-v5-mlx-server/gateway.out.log
+~/Library/Logs/jina-v5-mlx-server/gateway.err.log
+```
+
+The plists and scripts in this repository contain absolute paths for the current
+machine. Update the runtime path, model paths, Python path, and `vllm-mlx` path
+before using them elsewhere.
 
 ## Smoke Test
 
