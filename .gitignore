@@ -16,3 +16,4 @@ models/
 # Local runtime artifacts
 logs/
 .omc/
+.codegraph/

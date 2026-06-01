@@ -4,6 +4,12 @@ from pathlib import Path
 import uvicorn
 
 from jina_v5_mlx_demo.chat import DEFAULT_CHAT_MODEL_DIR, MLXChatService
+from jina_v5_mlx_demo.chat_proxy import (
+    CHAT_MODEL_ID,
+    DEFAULT_CHAT_UPSTREAM_BASE_URL,
+    DEFAULT_CHAT_UPSTREAM_MODEL,
+    ChatProxyClient,
+)
 from jina_v5_mlx_demo.modeling import DEFAULT_MODEL_DIR, MLXEmbeddingService
 from jina_v5_mlx_demo.reranking import DEFAULT_RERANKER_DIR, OfficialMLXRerankService
 from jina_v5_mlx_demo.server import create_app
@@ -41,11 +47,23 @@ def run_embed(args):
 def run_serve(args):
     embedding_service = MLXEmbeddingService(args.model_dir, idle_seconds=args.idle_seconds)
     rerank_service = OfficialMLXRerankService(args.reranker_dir, idle_seconds=args.idle_seconds)
-    chat_service = MLXChatService(args.chat_model_dir, idle_seconds=args.idle_seconds)
+    chat_proxy = None
+    chat_service = None
+    if not args.disable_chat_proxy:
+        chat_proxy = ChatProxyClient(
+            upstream_base_url=args.chat_upstream_base_url,
+            model_id=args.chat_model,
+            upstream_model=args.chat_upstream_model,
+            api_key=args.chat_upstream_api_key,
+            timeout_seconds=args.chat_upstream_timeout,
+        )
+    elif args.enable_local_chat:
+        chat_service = MLXChatService(args.chat_model_dir, idle_seconds=args.idle_seconds)
     app = create_app(
         embedding_service,
         rerank_service=rerank_service,
         chat_service=chat_service,
+        chat_proxy=chat_proxy,
         max_batch_size=args.max_batch_size,
         batch_timeout_ms=args.batch_timeout_ms,
         max_batch_tokens=args.max_batch_tokens,
@@ -55,13 +73,24 @@ def run_serve(args):
     )
     print(
         "Serving embeddings "
-        f"({embedding_service.model_id}), reranking ({rerank_service.model_id}), "
-        f"and chat ({chat_service.model_id})"
+        f"({embedding_service.model_id}) and reranking ({rerank_service.model_id})"
     )
+    if chat_proxy is not None:
+        print(
+            "Proxying chat "
+            f"({chat_proxy.model_id}) -> {chat_proxy.upstream_base_url} "
+            f"model={chat_proxy.upstream_model or chat_proxy.model_id}"
+        )
+    elif chat_service is not None:
+        print(f"Serving local chat ({chat_service.model_id})")
+    else:
+        print("Chat routes disabled")
     print(f"  http://{args.host}:{args.port}")
     print("  POST /v1/embeddings, /openai/v1/embeddings, /jina/v1/embeddings")
     print("  POST /v1/rerank, /jina/v1/rerank, /openai/v1/rerank")
-    print("  POST /v1/chat/completions, /openai/v1/chat/completions")
+    if chat_proxy is not None or chat_service is not None:
+        print("  POST /v1/chat/completions, /openai/v1/chat/completions")
+    print("  GET  /v1/models, /openai/v1/models")
     print("  GET  /stats, /stats.json")
     uvicorn.run(app, host=args.host, port=args.port)
 
@@ -139,6 +168,13 @@ def main():
     serve_parser.add_argument("--length-tolerance", type=float, default=0.2)
     serve_parser.add_argument("--idle-seconds", type=int, default=1800, help="Unload models after N seconds idle (default: 1800)")
     serve_parser.add_argument("--max-chat-queue-size", type=int, default=32, help="Maximum queued chat completion requests")
+    serve_parser.add_argument("--chat-model", default=CHAT_MODEL_ID, help="Public chat model id exposed by /v1/models")
+    serve_parser.add_argument("--chat-upstream-base-url", default=DEFAULT_CHAT_UPSTREAM_BASE_URL, help="OpenAI-compatible vllm-mlx upstream base URL")
+    serve_parser.add_argument("--chat-upstream-model", default=DEFAULT_CHAT_UPSTREAM_MODEL, help="Model name sent to the chat upstream; use empty string to preserve client model")
+    serve_parser.add_argument("--chat-upstream-api-key", default=None, help="Optional bearer token for the chat upstream")
+    serve_parser.add_argument("--chat-upstream-timeout", type=float, default=600.0, help="Chat upstream request timeout in seconds")
+    serve_parser.add_argument("--disable-chat-proxy", action="store_true", help="Do not register chat proxy routes")
+    serve_parser.add_argument("--enable-local-chat", action="store_true", help="Use the legacy in-process MLX chat service when chat proxy is disabled")
     serve_parser.set_defaults(func=run_serve)
 
     bench_chat_parser = subparsers.add_parser("bench-chat")
@@ -152,6 +188,8 @@ def main():
     args.model_dir = Path(args.model_dir)
     args.reranker_dir = Path(args.reranker_dir)
     args.chat_model_dir = Path(args.chat_model_dir)
+    if getattr(args, "chat_upstream_model", None) == "":
+        args.chat_upstream_model = None
     args.func(args)
 
 

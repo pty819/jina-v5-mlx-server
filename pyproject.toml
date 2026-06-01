@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "fastapi",
+    "httpx",
     "huggingface-hub[hf_xet]",
     "mlx",
     "mlx-embeddings>=0.1.0",

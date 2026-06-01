@@ -2,8 +2,9 @@ import json
 import time
 import uuid
 
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
+from jina_v5_mlx_demo.chat_proxy import ChatProxyError
 from jina_v5_mlx_demo.schema import (
     ChatCompletionRequest,
     EmbeddingRequest,
@@ -199,3 +200,56 @@ async def _chat_completion_stream(
 
 def _sse_data(payload: dict) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+def register_chat_proxy_routes(router, chat_proxy, metrics, *, tags=None):
+    _tags = tags or []
+
+    @router.post("/chat/completions", tags=_tags, summary="Proxy chat completion")
+    async def chat_completions(request: ChatCompletionRequest):
+        payload = request.model_dump(mode="json", exclude_none=True)
+        if request.stream:
+            try:
+                stream = await chat_proxy.open_stream(payload)
+            except ChatProxyError as error:
+                return _chat_proxy_error_response(error)
+            metrics.record("chat")
+            return StreamingResponse(
+                stream,
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+
+        try:
+            response = await chat_proxy.complete(payload)
+        except ChatProxyError as error:
+            return _chat_proxy_error_response(error)
+        metrics.record("chat")
+        return response
+
+
+def register_model_routes(router, model_specs: list[dict], *, tags=None):
+    _tags = tags or []
+
+    @router.get("/models", tags=_tags, summary="List models")
+    async def list_models():
+        return {
+            "object": "list",
+            "data": [
+                {
+                    "id": spec["id"],
+                    "object": "model",
+                    "created": 0,
+                    "owned_by": spec.get("owned_by", "local"),
+                    "capabilities": spec.get("capabilities", []),
+                }
+                for spec in model_specs
+            ],
+        }
+
+
+def _chat_proxy_error_response(error: ChatProxyError):
+    payload = error.payload
+    if not isinstance(payload, dict) or "error" not in payload:
+        payload = {"error": {"message": str(payload), "type": "upstream_error"}}
+    return JSONResponse(status_code=error.status_code, content=payload)

@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.liyifan.hy-mt2-vllm-mlx-chat</string>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/liyifan/Documents/Codex/2026-05-19/mlx-mac-jinaai-jina-embeddings-v5/jina-v5-mlx-demo</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/liyifan/.local/bin/vllm-mlx</string>
+    <string>serve</string>
+    <string>models/Hy-MT2-1.8B-4bit</string>
+    <string>--served-model-name</string>
+    <string>mlx-community/Hy-MT2-1.8B-4bit</string>
+    <string>--host</string>
+    <string>127.0.0.1</string>
+    <string>--port</string>
+    <string>8001</string>
+    <string>--continuous-batching</string>
+    <string>--enable-prefix-cache</string>
+    <string>--use-paged-cache</string>
+    <string>--stream-interval</string>
+    <string>1</string>
+    <string>--max-tokens</string>
+    <string>4096</string>
+    <string>--max-request-tokens</string>
+    <string>4096</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/Users/liyifan/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>PYTHONUNBUFFERED</key>
+    <string>1</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/liyifan/Documents/Codex/2026-05-19/mlx-mac-jinaai-jina-embeddings-v5/jina-v5-mlx-demo/logs/chat-vllm-mlx.out.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/Users/liyifan/Documents/Codex/2026-05-19/mlx-mac-jinaai-jina-embeddings-v5/jina-v5-mlx-demo/logs/chat-vllm-mlx.err.log</string>
+</dict>
+</plist>

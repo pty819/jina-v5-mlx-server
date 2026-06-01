@@ -14,8 +14,6 @@
     <string>run</string>
     <string>python</string>
     <string>main.py</string>
-    <string>--chat-model-dir</string>
-    <string>/Users/liyifan/Documents/Codex/2026-05-19/mlx-mac-jinaai-jina-embeddings-v5/jina-v5-mlx-demo/models/Hy-MT2-1.8B-4bit</string>
     <string>serve</string>
     <string>--host</string>
     <string>0.0.0.0</string>
@@ -31,6 +29,10 @@
     <string>0.2</string>
     <string>--max-length</string>
     <string>8192</string>
+    <string>--chat-upstream-base-url</string>
+    <string>http://127.0.0.1:8001/v1</string>
+    <string>--chat-upstream-model</string>
+    <string>mlx-community/Hy-MT2-1.8B-4bit</string>
   </array>
 
   <key>EnvironmentVariables</key>

@@ -1,9 +1,29 @@
+import json
+import asyncio
+import threading
+import time
 import unittest
 
+import httpx
 from fastapi.testclient import TestClient
 
+from jina_v5_mlx_demo.chat_proxy import ChatProxyClient
 from jina_v5_mlx_demo.reranking import RerankResponse, RerankResult
 from jina_v5_mlx_demo.server import create_app
+
+
+def json_loads(content):
+    if isinstance(content, bytes):
+        content = content.decode("utf-8")
+    return json.loads(content)
+
+
+def run(coro):
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
 
 
 class FakeEmbeddingService:
@@ -462,6 +482,238 @@ class CombinedServerTest(unittest.TestCase):
         self.assertEqual(second_paths.count("/openai/v1/chat/completions"), 1)
         self.assertEqual(first_paths.count("/health"), 1)
         self.assertEqual(second_paths.count("/health"), 1)
+
+
+class ChatProxyServerTest(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.requests = []
+
+        async def handler(request):
+            self.requests.append(request)
+            if request.url.path == "/v1/chat/completions":
+                payload = json_loads(request.content)
+                if payload.get("stream"):
+                    return httpx.Response(
+                        200,
+                        headers={"content-type": "text/event-stream"},
+                        content=(
+                            'data: {"object":"chat.completion.chunk","choices":[{"delta":{"content":"hi"}}]}\n\n'
+                            "data: [DONE]\n\n"
+                        ),
+                    )
+                return httpx.Response(
+                    200,
+                    json={
+                        "id": "chatcmpl-upstream",
+                        "object": "chat.completion",
+                        "model": payload["model"],
+                        "choices": [
+                            {
+                                "index": 0,
+                                "message": {"role": "assistant", "content": "proxied"},
+                                "finish_reason": "stop",
+                            }
+                        ],
+                        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                    },
+                )
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        self.chat_proxy = ChatProxyClient(
+            upstream_base_url="http://upstream/v1",
+            model_id="public-chat-model",
+            upstream_model="default",
+        )
+        await self.chat_proxy._client.aclose()
+        self.chat_proxy._client = httpx.AsyncClient(transport=transport, timeout=10)
+        self.client = TestClient(
+            create_app(
+                FakeEmbeddingService(),
+                rerank_service=FakeRerankService(),
+                chat_proxy=self.chat_proxy,
+            )
+        )
+
+    async def asyncTearDown(self):
+        await self.chat_proxy.close()
+
+    def test_chat_proxy_forwards_non_streaming_request(self):
+        response = self.client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "public-chat-model",
+                "messages": [{"role": "user", "content": "hello"}],
+                "max_tokens": 32,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["choices"][0]["message"]["content"], "proxied")
+        self.assertEqual(response.json()["model"], "default")
+        forwarded = json_loads(self.requests[-1].content)
+        self.assertEqual(forwarded["model"], "default")
+        self.assertEqual(forwarded["messages"][0]["content"], "hello")
+
+    def test_chat_proxy_forwards_streaming_response(self):
+        response = self.client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "public-chat-model",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": True,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("text/event-stream", response.headers["content-type"])
+        self.assertIn('"object":"chat.completion.chunk"', response.text)
+        self.assertIn("data: [DONE]", response.text)
+        self.assertEqual(json_loads(self.requests[-1].content)["model"], "default")
+
+    def test_chat_proxy_returns_upstream_streaming_error(self):
+        def handler(request):
+            self.requests.append(request)
+            return httpx.Response(
+                503,
+                headers={"content-type": "application/json"},
+                json={"error": {"message": "backend overloaded", "type": "server_error"}},
+            )
+
+        proxy = ChatProxyClient(
+            upstream_base_url="http://upstream/v1",
+            model_id="public-chat-model",
+            upstream_model="default",
+        )
+        run(proxy._client.aclose())
+        proxy._client = httpx.AsyncClient(transport=httpx.MockTransport(handler), timeout=10)
+        client = TestClient(
+            create_app(
+                FakeEmbeddingService(),
+                rerank_service=FakeRerankService(),
+                chat_proxy=proxy,
+            )
+        )
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "public-chat-model",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": True,
+            },
+        )
+        run(proxy.close())
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["error"]["message"], "backend overloaded")
+
+    def test_models_endpoint_lists_embedding_rerank_and_chat(self):
+        response = self.client.get("/v1/models")
+
+        self.assertEqual(response.status_code, 200)
+        model_ids = {item["id"] for item in response.json()["data"]}
+        self.assertIn("fake-embedding-model", model_ids)
+        self.assertIn("jina-reranker-v3-4bit-mxfp4", model_ids)
+        self.assertIn("public-chat-model", model_ids)
+
+    def test_openai_models_alias(self):
+        response = self.client.get("/openai/v1/models")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["object"], "list")
+
+    def test_stats_uses_proxy_active_state(self):
+        response = self.client.get("/stats.json")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["chat"]["unfinished"], 0)
+
+    def test_streaming_chat_proxy_handles_concurrent_requests(self):
+        active = 0
+        max_active = 0
+        lock = threading.Lock()
+        barrier = threading.Barrier(2)
+
+        def handler(request):
+            nonlocal active, max_active
+            self.requests.append(request)
+            with lock:
+                active += 1
+                max_active = max(max_active, active)
+            barrier.wait(timeout=2)
+            time.sleep(0.05)
+            with lock:
+                active -= 1
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                content='data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]\n\n',
+            )
+
+        proxy = ChatProxyClient(
+            upstream_base_url="http://upstream/v1",
+            model_id="public-chat-model",
+            upstream_model="default",
+        )
+        run(proxy._client.aclose())
+        proxy._client = httpx.AsyncClient(transport=httpx.MockTransport(handler), timeout=10)
+        client = TestClient(
+            create_app(
+                FakeEmbeddingService(),
+                rerank_service=FakeRerankService(),
+                chat_proxy=proxy,
+            )
+        )
+
+        def post_stream():
+            return client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "public-chat-model",
+                    "messages": [{"role": "user", "content": "hello"}],
+                    "stream": True,
+                },
+            )
+
+        responses = []
+
+        def call_first():
+            responses.append(post_stream())
+
+        def call_second():
+            responses.append(post_stream())
+
+        t1 = threading.Thread(target=call_first)
+        t2 = threading.Thread(target=call_second)
+        t1.start()
+        t2.start()
+        t1.join(timeout=5)
+        t2.join(timeout=5)
+        run(proxy.close())
+
+        self.assertFalse(t1.is_alive())
+        self.assertFalse(t2.is_alive())
+        self.assertEqual(len(responses), 2)
+        for response in responses:
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("data: [DONE]", response.text)
+        self.assertEqual(max_active, 2)
+
+
+class ModelsWithoutChatTest(unittest.TestCase):
+    def test_chat_route_can_be_disabled(self):
+        client = TestClient(
+            create_app(
+                FakeEmbeddingService(),
+                rerank_service=FakeRerankService(),
+            )
+        )
+
+        self.assertEqual(client.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "hi"}]}).status_code, 404)
+        response = client.get("/v1/models")
+        self.assertEqual(response.status_code, 200)
+        model_ids = {item["id"] for item in response.json()["data"]}
+        self.assertNotIn("fake-chat-model", model_ids)
 
 
 if __name__ == "__main__":

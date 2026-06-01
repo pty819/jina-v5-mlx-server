@@ -547,6 +547,7 @@ version = "0.2.0"
 source = { virtual = "." }
 dependencies = [
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "huggingface-hub", extra = ["hf-xet"] },
     { name = "mlx" },
     { name = "mlx-embeddings" },
@@ -560,6 +561,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "huggingface-hub", extras = ["hf-xet"] },
     { name = "mlx" },
     { name = "mlx-embeddings", specifier = ">=0.1.0" },

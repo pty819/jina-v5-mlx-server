@@ -1,12 +1,16 @@
 # Jina v5 MLX Server
 
-FastAPI serving for `jinaai/jina-embeddings-v5-text-small-retrieval-mlx` embeddings, `mlx-community/jina-reranker-v3-4bit-mxfp4` reranking, and `mlx-community/Hy-MT2-1.8B-4bit` chat completions on Apple Silicon with MLX.
+FastAPI serving for `jinaai/jina-embeddings-v5-text-small-retrieval-mlx` embeddings and `mlx-community/jina-reranker-v3-4bit-mxfp4` reranking on Apple Silicon with MLX, plus OpenAI-style chat proxying to a dedicated `vllm-mlx` server.
 
-The server provides embedding, reranking, and OpenAI-style chat completion endpoints from a single local process, with dynamic batching for embeddings, request-level queues for rerank/chat, idle model unloading, and operator stats.
+The recommended runtime is split into two processes:
+
+- Gateway/RAG process: FastAPI embedding, rerank, stats, model discovery, and chat proxy routes.
+- Chat process: `vllm-mlx serve mlx-community/Hy-MT2-1.8B-4bit` with continuous batching and KV-cache management.
 
 ## Features
 
-- Runs Jina v5 embedding, Jina v3 4-bit reranker, and Hy-MT2 4-bit chat MLX weights locally on macOS Apple Silicon.
+- Runs Jina v5 embedding and Jina v3 4-bit reranker weights locally on macOS Apple Silicon.
+- Proxies Hy-MT2 chat completions to a separate `vllm-mlx` OpenAI-compatible server.
 - **Embedding endpoints:**
   - `POST /v1/embeddings`
   - `POST /openai/v1/embeddings`
@@ -18,11 +22,14 @@ The server provides embedding, reranking, and OpenAI-style chat completion endpo
 - **Chat completion endpoints:**
   - `POST /v1/chat/completions`
   - `POST /openai/v1/chat/completions`
+- **Model discovery endpoints:**
+  - `GET /v1/models`
+  - `GET /openai/v1/models`
 - Jina task routing for embeddings: `retrieval.query` and `retrieval.passage`.
 - Matryoshka output dimensions: `32`, `64`, `128`, `256`, `512`, `768`, `1024`.
 - Dynamic batching with token-length bucketing for embeddings.
 - Request-level rerank queue with shared MLX inference gate.
-- Request-level chat completion queue with shared MLX inference gate.
+- Chat proxy path does not share the embedding/rerank inference gate.
 - Operator stats: `GET /stats` (HTML) and `GET /stats.json`.
 - Optional macOS `launchd` background service.
 
@@ -30,9 +37,10 @@ The server provides embedding, reranking, and OpenAI-style chat completion endpo
 
 - macOS on Apple Silicon.
 - Python managed by `uv`.
+- `vllm-mlx` installed as a separate CLI for chat serving.
 - About 1.2 GB for embedding model weights.
 - About 320 MB for 4-bit reranker model weights.
-- About 1.1 GB for Hy-MT2 1.8B 4-bit chat model weights.
+- About 1.1 GB for Hy-MT2 1.8B 4-bit chat model weights in the vllm-mlx process.
 
 ## Setup
 
@@ -47,24 +55,43 @@ uv run hf download mlx-community/jina-reranker-v3-4bit-mxfp4 \
 
 uv run hf download mlx-community/Hy-MT2-1.8B-4bit \
   --local-dir models/Hy-MT2-1.8B-4bit
+
+uv tool install vllm-mlx
 ```
 
 The `models/` directory is ignored by Git.
 
 ## Run
 
+Start the chat backend first:
+
+```bash
+vllm-mlx serve models/Hy-MT2-1.8B-4bit \
+  --served-model-name mlx-community/Hy-MT2-1.8B-4bit \
+  --host 127.0.0.1 \
+  --port 8001 \
+  --continuous-batching \
+  --enable-prefix-cache \
+  --use-paged-cache \
+  --stream-interval 1 \
+  --max-tokens 4096 \
+  --max-request-tokens 4096
+```
+
+Then start the gateway/RAG process:
+
 ```bash
 uv run python main.py \
-  --chat-model-dir models/Hy-MT2-1.8B-4bit \
   serve \
   --host 127.0.0.1 \
   --port 8000 \
   --max-batch-size 4 \
   --batch-timeout-ms 5 \
   --max-batch-tokens 8192 \
-  --max-chat-queue-size 32 \
   --length-tolerance 0.2 \
-  --max-length 8192
+  --max-length 8192 \
+  --chat-upstream-base-url http://127.0.0.1:8001/v1 \
+  --chat-upstream-model mlx-community/Hy-MT2-1.8B-4bit
 ```
 
 Override model directories:
@@ -73,8 +100,20 @@ Override model directories:
 uv run python main.py \
   --model-dir /path/to/embedding-model \
   --reranker-dir /path/to/reranker-model \
-  --chat-model-dir /path/to/Hy-MT2-1.8B-4bit \
   serve --host 0.0.0.0 --port 8000
+```
+
+Disable chat proxy routes entirely:
+
+```bash
+uv run python main.py serve --disable-chat-proxy
+```
+
+Use the legacy in-process chat implementation only for compatibility/debugging:
+
+```bash
+uv run python main.py --chat-model-dir models/Hy-MT2-1.8B-4bit \
+  serve --disable-chat-proxy --enable-local-chat
 ```
 
 FastAPI docs:
@@ -218,9 +257,16 @@ POST /v1/chat/completions
 POST /openai/v1/chat/completions
 ```
 
-The chat model is loaded lazily on the first chat request and unloaded after
-`--idle-seconds` of inactivity. Requests are queued and enter the same shared
-MLX inference gate as embeddings and reranking.
+By default these routes are gateway proxy routes. They forward the OpenAI-style
+request body to `--chat-upstream-base-url`, default
+`http://127.0.0.1:8001/v1`, where `vllm-mlx` owns chat inference,
+continuous batching, paged KV cache, and prefix cache.
+
+The gateway exposes the public model id `mlx-community/Hy-MT2-1.8B-4bit` and,
+by default, sends that same model id to vllm-mlx. The vllm-mlx command above
+sets `--served-model-name mlx-community/Hy-MT2-1.8B-4bit` so `/v1/models`,
+requests, and responses use the same visible model name. Set
+`--chat-upstream-model ""` to preserve the client-supplied model unchanged.
 
 ```bash
 curl http://127.0.0.1:8000/v1/chat/completions \
@@ -279,7 +325,45 @@ curl -N http://127.0.0.1:8000/v1/chat/completions \
 ```
 
 Tool calls, vision content, and logprobs are not implemented. Multi-turn text
-message arrays are supported.
+message arrays are accepted by the gateway; actual chat capability depends on
+the vllm-mlx backend model/server.
+
+## Model Discovery
+
+```bash
+curl http://127.0.0.1:8000/v1/models
+```
+
+The response is OpenAI-style:
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "jina-embeddings-v5-text-small",
+      "object": "model",
+      "created": 0,
+      "owned_by": "local",
+      "capabilities": ["embeddings"]
+    },
+    {
+      "id": "jina-reranker-v3-4bit-mxfp4",
+      "object": "model",
+      "created": 0,
+      "owned_by": "local",
+      "capabilities": ["rerank"]
+    },
+    {
+      "id": "mlx-community/Hy-MT2-1.8B-4bit",
+      "object": "model",
+      "created": 0,
+      "owned_by": "local",
+      "capabilities": ["chat.completions"]
+    }
+  ]
+}
+```
 
 ## Chat Benchmark
 
@@ -363,24 +447,21 @@ The server runs an async batching queue for embeddings:
 - A single input whose truncated token count exceeds `--max-batch-tokens` is rejected
   before it enters the queue.
 
-## Shared Inference Gate
+## Process Split And Inference Gates
 
-The embedding batcher, rerank queue, and chat completion queue share a single
-process-local `asyncio.Lock` inference gate. Only one MLX model call enters
-inference at a time. This avoids contention on Apple Silicon GPU resources.
+The gateway process keeps embedding and rerank under one process-local
+`asyncio.Lock` inference gate. Only one embedding/rerank MLX model call enters
+that gate at a time. This avoids local contention while preserving embedding
+dynamic batching and rerank queue semantics.
 
-Chat completions are not dynamically batched and do not use continuous batching.
-At runtime there is at most one active chat decode. If another chat request
-arrives while a streaming response is still decoding, the new request waits in
-the chat FIFO queue and does not start prefill until the active decode releases
-the shared inference gate. The queue is bounded by `--max-chat-queue-size`
-(default `32`); excess chat requests return HTTP 503.
+Chat completions are not generated in this process by default. The gateway only
+counts and forwards chat requests to vllm-mlx. vllm-mlx owns prefill/decode
+scheduling, continuous batching, paged KV cache, prefix cache, and streaming.
 
-This is intentional for the current local MLX process: embedding has fixed-shape
-batching, but chat generation keeps per-request KV cache state during decode.
-Mixing a new prefill into another request's decode would require a continuous
-batching scheduler with per-sequence KV cache management. This server currently
-chooses predictable memory use and correctness over interleaved chat throughput.
+The legacy in-process chat path still exists behind
+`--disable-chat-proxy --enable-local-chat`, but it is not the recommended
+serving path because it serializes autoregressive decode through a local FIFO
+queue and shared gate.
 
 ## OpenViking Configuration
 
@@ -426,15 +507,26 @@ OpenViking's rerank client sends `model`, `query`, and `documents`, then reads
 contract from every rerank alias. Leave `top_n` unset for OpenViking so every
 input document receives a score.
 
-## macOS Background Service
+## macOS Background Services
 
-The repository includes a `launchd` plist at:
+The repository includes two `launchd` plists:
 
 ```text
-launchd/com.liyifan.jina-v5-mlx-embedding.plist
+launchd/com.liyifan.hy-mt2-vllm-mlx-chat.plist      # vllm-mlx chat backend on 127.0.0.1:8001
+launchd/com.liyifan.jina-v5-mlx-embedding.plist     # gateway + embedding/rerank on 0.0.0.0:8000
 ```
 
-Install it for the current user:
+Install the chat backend first:
+
+```bash
+CHAT_LABEL=com.liyifan.hy-mt2-vllm-mlx-chat
+cp launchd/$CHAT_LABEL.plist ~/Library/LaunchAgents/$CHAT_LABEL.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/$CHAT_LABEL.plist
+launchctl enable gui/$(id -u)/$CHAT_LABEL
+launchctl kickstart -k gui/$(id -u)/$CHAT_LABEL
+```
+
+Install the gateway after the chat backend:
 
 ```bash
 LABEL=com.liyifan.jina-v5-mlx-embedding
@@ -444,7 +536,7 @@ launchctl enable gui/$(id -u)/$LABEL
 launchctl kickstart -k gui/$(id -u)/$LABEL
 ```
 
-The plist in this repository contains absolute paths for the current machine. Update `WorkingDirectory`, log paths, and the `uv` path before using it elsewhere.
+The plists in this repository contain absolute paths for the current machine. Update `WorkingDirectory`, log paths, the `uv` path, and the `vllm-mlx` path before using them elsewhere.
 
 ## Smoke Test
 

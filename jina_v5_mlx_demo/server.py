@@ -11,8 +11,10 @@ from jina_v5_mlx_demo.chat_queue import ChatQueue
 from jina_v5_mlx_demo.metrics import RequestMetrics
 from jina_v5_mlx_demo.rerank_queue import RerankQueue
 from jina_v5_mlx_demo.routes import (
+    register_chat_proxy_routes,
     register_chat_routes,
     register_embedding_routes,
+    register_model_routes,
     register_rerank_routes,
 )
 from jina_v5_mlx_demo.schema import RequestError, parse_max_length
@@ -23,6 +25,7 @@ def create_app(
     *,
     rerank_service=None,
     chat_service=None,
+    chat_proxy=None,
     metrics=None,
     max_batch_size: int = 4,
     batch_timeout_ms: int = 5,
@@ -50,10 +53,11 @@ def create_app(
     )
     chat_queue = (
         ChatQueue(chat_service, inference_gate=inference_gate, max_queue_size=max_chat_queue_size)
-        if chat_service is not None
+        if chat_service is not None and chat_proxy is None
         else None
     )
     metrics = metrics or RequestMetrics()
+    model_specs = _model_specs(embedding_service, rerank_service=rerank_service, chat_service=chat_service, chat_proxy=chat_proxy)
 
     openai_router = APIRouter(prefix="/openai/v1")
     jina_router = APIRouter(prefix="/jina/v1")
@@ -63,8 +67,11 @@ def create_app(
     register_embedding_routes(openai_router, embedding_service, batcher, metrics, default_max_length, tags=["OpenAI"])
     if rerank_service is not None:
         register_rerank_routes(openai_router, rerank_service, rerank_queue, metrics, tags=["OpenAI"])
-    if chat_service is not None:
+    if chat_proxy is not None:
+        register_chat_proxy_routes(openai_router, chat_proxy, metrics, tags=["OpenAI"])
+    elif chat_service is not None:
         register_chat_routes(openai_router, chat_service, chat_queue, metrics, tags=["OpenAI"])
+    register_model_routes(openai_router, model_specs, tags=["OpenAI"])
 
     # --- Jina group ---
     register_embedding_routes(jina_router, embedding_service, batcher, metrics, default_max_length, tags=["Jina"])
@@ -76,8 +83,11 @@ def create_app(
     register_embedding_routes(v1_router, embedding_service, batcher, metrics, default_max_length, tags=["v1"])
     if rerank_service is not None:
         register_rerank_routes(v1_router, rerank_service, rerank_queue, metrics, tags=["v1"])
-    if chat_service is not None:
+    if chat_proxy is not None:
+        register_chat_proxy_routes(v1_router, chat_proxy, metrics, tags=["v1"])
+    elif chat_service is not None:
         register_chat_routes(v1_router, chat_service, chat_queue, metrics, tags=["v1"])
+    register_model_routes(v1_router, model_specs, tags=["v1"])
 
     # --- Utils group ---
     @utils_router.get("/health", tags=["Utils"], summary="Health check")
@@ -87,7 +97,10 @@ def create_app(
             result["rerank_model"] = rerank_service.model_id
         else:
             result["model"] = embedding_service.model_id
-        if chat_service is not None:
+        if chat_proxy is not None:
+            result["chat_model"] = chat_proxy.model_id
+            result["chat_upstream_base_url"] = chat_proxy.upstream_base_url
+        elif chat_service is not None:
             result["chat_model"] = chat_service.model_id
         return result
 
@@ -96,7 +109,7 @@ def create_app(
         snapshot = metrics.snapshot(
             embedding_state=batcher.queue_state(),
             rerank_state=rerank_queue.queue_state() if rerank_queue else {"queued": 0, "active": 0, "unfinished": 0},
-            chat_state=chat_queue.queue_state() if chat_queue else {"queued": 0, "active": 0, "unfinished": 0},
+            chat_state=_chat_state(chat_queue=chat_queue, chat_proxy=chat_proxy),
         )
         snapshot["mlx_memory"] = {
             "active_mb": round(mx.get_active_memory() / 1024**2),
@@ -126,6 +139,8 @@ def create_app(
             await batcher.stop()
             if chat_service is not None and hasattr(chat_service, "close"):
                 chat_service.close()
+            if chat_proxy is not None and hasattr(chat_proxy, "close"):
+                await chat_proxy.close()
 
     app = FastAPI(
         title="Jina v5 MLX Server",
@@ -150,6 +165,43 @@ def create_app(
     app.include_router(utils_router)
 
     return app
+
+
+def _chat_state(*, chat_queue, chat_proxy) -> dict[str, int]:
+    if chat_proxy is not None:
+        return chat_proxy.queue_state()
+    if chat_queue is not None:
+        return chat_queue.queue_state()
+    return {"queued": 0, "active": 0, "unfinished": 0}
+
+
+def _model_specs(embedding_service, *, rerank_service, chat_service, chat_proxy) -> list[dict]:
+    specs = [
+        {
+            "id": embedding_service.model_id,
+            "capabilities": ["embeddings"],
+        },
+        {
+            "id": "jina-v5-query",
+            "capabilities": ["embeddings"],
+        },
+        {
+            "id": "jina-v5-passage",
+            "capabilities": ["embeddings"],
+        },
+    ]
+    if rerank_service is not None:
+        specs.append({
+            "id": rerank_service.model_id,
+            "capabilities": ["rerank"],
+        })
+    chat_model = chat_proxy.model_id if chat_proxy is not None else chat_service.model_id if chat_service is not None else None
+    if chat_model is not None:
+        specs.append({
+            "id": chat_model,
+            "capabilities": ["chat.completions"],
+        })
+    return specs
 
 
 async def request_error_handler(_request: Request, error: RequestError):
