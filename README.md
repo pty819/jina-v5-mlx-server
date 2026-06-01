@@ -62,6 +62,7 @@ uv run python main.py \
   --max-batch-size 4 \
   --batch-timeout-ms 5 \
   --max-batch-tokens 8192 \
+  --max-chat-queue-size 32 \
   --length-tolerance 0.2 \
   --max-length 8192
 ```
@@ -210,7 +211,7 @@ passed explicitly with `--reranker-dir`, but it is no longer the default.
 
 ## Chat Completion Endpoints
 
-Two route aliases serve the same OpenAI-style non-streaming chat completion contract:
+Two route aliases serve the same OpenAI-style chat completion contract:
 
 ```text
 POST /v1/chat/completions
@@ -262,8 +263,43 @@ Response shape:
 }
 ```
 
-`stream=true`, tool calls, vision content, and logprobs are not implemented.
-Multi-turn text message arrays are supported.
+Streaming is supported with OpenAI-style server-sent events:
+
+```bash
+curl -N http://127.0.0.1:8000/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "mlx-community/Hy-MT2-1.8B-4bit",
+    "messages": [
+      {"role": "user", "content": "Translate this into English: 我喜欢机器学习。"}
+    ],
+    "stream": true,
+    "max_tokens": 64
+  }'
+```
+
+Tool calls, vision content, and logprobs are not implemented. Multi-turn text
+message arrays are supported.
+
+## Chat Benchmark
+
+Use the built-in translation benchmark to inspect prefill and decode speed:
+
+```bash
+uv run python main.py \
+  --chat-model-dir models/Hy-MT2-1.8B-4bit \
+  bench-chat --max-tokens 160 --temperature 0
+```
+
+The benchmark prompt is a Chinese-to-English translation request with enough
+context to exercise prefill. Output includes:
+
+- `prompt_tokens`
+- `prefill_tps`
+- `completion_tokens`
+- `decode_tps`
+- `peak_memory_gb`
+- translated output text
 
 ## Stats
 
@@ -295,6 +331,13 @@ Example response:
     "queued": 1,
     "active": 1,
     "unfinished": 2
+  },
+  "chat": {
+    "requests_1h": 4,
+    "requests_1d": 8,
+    "queued": 2,
+    "active": 1,
+    "unfinished": 3
   }
 }
 ```
@@ -325,6 +368,19 @@ The server runs an async batching queue for embeddings:
 The embedding batcher, rerank queue, and chat completion queue share a single
 process-local `asyncio.Lock` inference gate. Only one MLX model call enters
 inference at a time. This avoids contention on Apple Silicon GPU resources.
+
+Chat completions are not dynamically batched and do not use continuous batching.
+At runtime there is at most one active chat decode. If another chat request
+arrives while a streaming response is still decoding, the new request waits in
+the chat FIFO queue and does not start prefill until the active decode releases
+the shared inference gate. The queue is bounded by `--max-chat-queue-size`
+(default `32`); excess chat requests return HTTP 503.
+
+This is intentional for the current local MLX process: embedding has fixed-shape
+batching, but chat generation keeps per-request KV cache state during decode.
+Mixing a new prefill into another request's decode would require a continuous
+batching scheduler with per-sequence KV cache management. This server currently
+chooses predictable memory use and correctness over interleaved chat throughput.
 
 ## OpenViking Configuration
 

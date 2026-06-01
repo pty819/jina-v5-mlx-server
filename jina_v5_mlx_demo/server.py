@@ -29,6 +29,7 @@ def create_app(
     max_batch_tokens: int = 8192,
     length_tolerance: float = 0.2,
     default_max_length: int = 8192,
+    max_chat_queue_size: int = 32,
 ) -> FastAPI:
     parse_max_length(default_max_length)
 
@@ -48,7 +49,7 @@ def create_app(
         else None
     )
     chat_queue = (
-        ChatQueue(chat_service, inference_gate=inference_gate)
+        ChatQueue(chat_service, inference_gate=inference_gate, max_queue_size=max_chat_queue_size)
         if chat_service is not None
         else None
     )
@@ -63,7 +64,7 @@ def create_app(
     if rerank_service is not None:
         register_rerank_routes(openai_router, rerank_service, rerank_queue, metrics, tags=["OpenAI"])
     if chat_service is not None:
-        register_chat_routes(openai_router, chat_service, chat_queue, tags=["OpenAI"])
+        register_chat_routes(openai_router, chat_service, chat_queue, metrics, tags=["OpenAI"])
 
     # --- Jina group ---
     register_embedding_routes(jina_router, embedding_service, batcher, metrics, default_max_length, tags=["Jina"])
@@ -76,7 +77,7 @@ def create_app(
     if rerank_service is not None:
         register_rerank_routes(v1_router, rerank_service, rerank_queue, metrics, tags=["v1"])
     if chat_service is not None:
-        register_chat_routes(v1_router, chat_service, chat_queue, tags=["v1"])
+        register_chat_routes(v1_router, chat_service, chat_queue, metrics, tags=["v1"])
 
     # --- Utils group ---
     @utils_router.get("/health", tags=["Utils"], summary="Health check")
@@ -95,6 +96,7 @@ def create_app(
         snapshot = metrics.snapshot(
             embedding_state=batcher.queue_state(),
             rerank_state=rerank_queue.queue_state() if rerank_queue else {"queued": 0, "active": 0, "unfinished": 0},
+            chat_state=chat_queue.queue_state() if chat_queue else {"queued": 0, "active": 0, "unfinished": 0},
         )
         snapshot["mlx_memory"] = {
             "active_mb": round(mx.get_active_memory() / 1024**2),
@@ -173,11 +175,12 @@ def _render_stats_html(snapshot: dict) -> str:
   body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; background:#0f1117; color:#e0e0e0; padding:24px; }
   h1 { font-size:20px; font-weight:600; margin-bottom:4px; color:#fff; }
   .ts { font-size:12px; color:#888; margin-bottom:20px; }
-  .grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; max-width:720px; }
+  .grid { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; max-width:1080px; }
   .card { background:#1a1d27; border:1px solid #2a2d37; border-radius:10px; padding:16px 20px; }
   .card h2 { font-size:14px; font-weight:600; text-transform:uppercase; letter-spacing:1px; margin-bottom:12px; }
   .card:nth-child(1) h2 { color:#6dd5fa; }
   .card:nth-child(2) h2 { color:#f6d365; }
+  .card:nth-child(3) h2 { color:#b8e986; }
   .metric { display:flex; align-items:center; gap:10px; margin-bottom:8px; font-size:13px; }
   .label { width:90px; color:#999; flex-shrink:0; }
   .value { font-weight:600; min-width:36px; text-align:right; }
@@ -186,11 +189,12 @@ def _render_stats_html(snapshot: dict) -> str:
   .bar-fill { height:100%; border-radius:3px; transition:width .4s ease; }
   .bar-fill.req { background:linear-gradient(90deg,#6dd5fa,#6dd5fa); }
   .card:nth-child(2) .bar-fill.req { background:linear-gradient(90deg,#f6d365,#f6d365); }
+  .card:nth-child(3) .bar-fill.req { background:linear-gradient(90deg,#b8e986,#b8e986); }
   .bar-fill.q { background:linear-gradient(90deg,#ff6b6b,#ee5a24); }
-  .mlx { margin-top:16px; max-width:720px; background:#1a1d27; border:1px solid #2a2d37; border-radius:10px; padding:16px 20px; }
+  .mlx { margin-top:16px; max-width:1080px; background:#1a1d27; border:1px solid #2a2d37; border-radius:10px; padding:16px 20px; }
   .mlx h2 { font-size:14px; font-weight:600; color:#a29bfe; text-transform:uppercase; letter-spacing:1px; margin-bottom:8px; }
   .mlx .metric { margin-bottom:4px; }
-  .foot { margin-top:12px; font-size:11px; color:#555; max-width:720px; display:flex; justify-content:space-between; }
+  .foot { margin-top:12px; font-size:11px; color:#555; max-width:1080px; display:flex; justify-content:space-between; }
   .dot { display:inline-block; width:6px; height:6px; border-radius:50%; background:#4cd137; margin-right:6px; animation:pulse 2s infinite; }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
   .dot.err { background:#ff6b6b; animation:none; }
@@ -215,6 +219,14 @@ def _render_stats_html(snapshot: dict) -> str:
     <div class="metric"><span class="label">Queued</span><span class="value num" id="rr-q">-</span></div>
     <div class="metric"><span class="label">Active</span><span class="value num" id="rr-a">-</span></div>
     <div class="metric"><span class="label">Unfinished</span><div class="bar-track"><div class="bar-fill q" id="rr-uf-bar"></div></div><span class="value num" id="rr-uf">-</span></div>
+  </div>
+  <div class="card" id="chat-card">
+    <h2>Chat</h2>
+    <div class="metric"><span class="label">Requests 1h</span><div class="bar-track"><div class="bar-fill req" id="chat-1h-bar"></div></div><span class="value" id="chat-1h">-</span></div>
+    <div class="metric"><span class="label">Requests 24h</span><div class="bar-track"><div class="bar-fill req" id="chat-1d-bar"></div></div><span class="value" id="chat-1d">-</span></div>
+    <div class="metric"><span class="label">Queued</span><span class="value num" id="chat-q">-</span></div>
+    <div class="metric"><span class="label">Active</span><span class="value num" id="chat-a">-</span></div>
+    <div class="metric"><span class="label">Unfinished</span><div class="bar-track"><div class="bar-fill q" id="chat-uf-bar"></div></div><span class="value num" id="chat-uf">-</span></div>
   </div>
 </div>
 <div class="mlx">
@@ -243,6 +255,7 @@ function tick(){
   fetch('/stats.json').then(r=>r.json()).then(d=>{
     upd('emb',d.embedding);
     upd('rr',d.rerank);
+    upd('chat',d.chat);
     var m=d.mlx_memory||{};
     $('mlx-active').textContent=m.active_mb||0;
     $('mlx-cache').textContent=m.cache_mb||0;

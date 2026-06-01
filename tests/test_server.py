@@ -60,6 +60,23 @@ class FakeChatService:
             "finish_reason": "stop",
         }
 
+    def stream_complete(self, messages, *, max_tokens, temperature, top_p, stop):
+        self.last_call = {
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "top_p": top_p,
+            "stop": stop,
+        }
+        yield {"type": "content", "content": "reply:"}
+        yield {"type": "content", "content": messages[-1]["content"]}
+        yield {
+            "type": "final",
+            "prompt_tokens": 5,
+            "completion_tokens": 3,
+            "finish_reason": "stop",
+        }
+
 
 class EmbeddingServerTest(unittest.TestCase):
     def setUp(self):
@@ -314,6 +331,7 @@ class CombinedServerTest(unittest.TestCase):
     def test_stats_json_splits_counts(self):
         self.client.post("/v1/embeddings", json={"input": "hello", "dimensions": 32})
         self.client.post("/v1/rerank", json={"query": "q", "documents": ["a"]})
+        self.client.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "hello"}]})
 
         response = self.client.get("/stats.json")
 
@@ -321,6 +339,7 @@ class CombinedServerTest(unittest.TestCase):
         body = response.json()
         self.assertEqual(body["embedding"]["requests_1d"], 1)
         self.assertEqual(body["rerank"]["requests_1d"], 1)
+        self.assertEqual(body["chat"]["requests_1d"], 1)
 
     def test_stats_html_renders(self):
         response = self.client.get("/stats")
@@ -329,6 +348,7 @@ class CombinedServerTest(unittest.TestCase):
         self.assertIn("text/html", response.headers["content-type"])
         self.assertIn("Embedding", response.text)
         self.assertIn("Rerank", response.text)
+        self.assertIn("Chat", response.text)
         self.assertIn("Unfinished", response.text)
 
     def test_health_reports_both_models(self):
@@ -382,7 +402,7 @@ class CombinedServerTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["choices"][0]["message"]["content"], "reply:hello")
 
-    def test_rejects_streaming_chat_requests(self):
+    def test_streaming_chat_completions_endpoint(self):
         response = self.client.post(
             "/v1/chat/completions",
             json={
@@ -391,8 +411,33 @@ class CombinedServerTest(unittest.TestCase):
             },
         )
 
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("stream=true is not supported", response.json()["error"]["message"])
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("text/event-stream", response.headers["content-type"])
+        self.assertIn('"object": "chat.completion.chunk"', response.text)
+        self.assertIn('"delta": {"role": "assistant"}', response.text)
+        self.assertIn('"delta": {"content": "reply:"}', response.text)
+        self.assertIn('"finish_reason": "stop"', response.text)
+        self.assertIn("data: [DONE]", response.text)
+
+    def test_full_chat_queue_returns_503_before_streaming(self):
+        client = TestClient(
+            create_app(
+                FakeEmbeddingService(),
+                rerank_service=FakeRerankService(),
+                chat_service=FakeChatService(),
+                max_chat_queue_size=0,
+            )
+        )
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": True,
+            },
+        )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("chat queue is full", response.json()["error"]["message"])
 
     def test_create_app_does_not_reuse_registered_routes(self):
         first_app = create_app(

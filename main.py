@@ -51,6 +51,7 @@ def run_serve(args):
         max_batch_tokens=args.max_batch_tokens,
         length_tolerance=args.length_tolerance,
         default_max_length=args.max_length,
+        max_chat_queue_size=args.max_chat_queue_size,
     )
     print(
         "Serving embeddings "
@@ -63,6 +64,44 @@ def run_serve(args):
     print("  POST /v1/chat/completions, /openai/v1/chat/completions")
     print("  GET  /stats, /stats.json")
     uvicorn.run(app, host=args.host, port=args.port)
+
+
+def run_bench_chat(args):
+    messages = [
+        {
+            "role": "system",
+            "content": "You are a professional Chinese to English translation engine. Only output English.",
+        },
+        {
+            "role": "user",
+            "content": (
+                "Translate this into English while preserving meaning and tone: "
+                "在真实的生产环境里，翻译模型的性能不能只看总耗时。"
+                "我们需要分别观察prefill阶段处理上下文的速度，以及decode阶段逐token生成译文的速度，"
+                "这样才能判断服务在长文本输入和并发请求下是否稳定。"
+            ),
+        },
+    ]
+    service = MLXChatService(args.chat_model_dir, idle_seconds=args.idle_seconds)
+    try:
+        result = service.complete(
+            messages,
+            max_tokens=args.max_tokens,
+            temperature=args.temperature,
+            top_p=args.top_p,
+            stop=None,
+        )
+    finally:
+        service.close()
+
+    print(f"model={service.model_id}")
+    print(f"prompt_tokens={result['prompt_tokens']}")
+    print(f"prefill_tps={result['prompt_tps']:.2f}")
+    print(f"completion_tokens={result['completion_tokens']}")
+    print(f"decode_tps={result['generation_tps']:.2f}")
+    print(f"peak_memory_gb={result['peak_memory_gb']:.3f}")
+    print("output:")
+    print(result["content"].strip())
 
 
 def main():
@@ -99,7 +138,15 @@ def main():
     serve_parser.add_argument("--max-batch-tokens", type=int, default=8192)
     serve_parser.add_argument("--length-tolerance", type=float, default=0.2)
     serve_parser.add_argument("--idle-seconds", type=int, default=1800, help="Unload models after N seconds idle (default: 1800)")
+    serve_parser.add_argument("--max-chat-queue-size", type=int, default=32, help="Maximum queued chat completion requests")
     serve_parser.set_defaults(func=run_serve)
+
+    bench_chat_parser = subparsers.add_parser("bench-chat")
+    bench_chat_parser.add_argument("--max-tokens", type=int, default=160)
+    bench_chat_parser.add_argument("--temperature", type=float, default=0.0)
+    bench_chat_parser.add_argument("--top-p", type=float, default=1.0)
+    bench_chat_parser.add_argument("--idle-seconds", type=int, default=1800)
+    bench_chat_parser.set_defaults(func=run_bench_chat)
 
     args = parser.parse_args()
     args.model_dir = Path(args.model_dir)

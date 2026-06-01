@@ -12,6 +12,7 @@ class RequestMetrics:
         self._events: dict[str, deque[float]] = {
             "embedding": deque(),
             "rerank": deque(),
+            "chat": deque(),
         }
 
     def record(self, workload: str) -> None:
@@ -21,11 +22,16 @@ class RequestMetrics:
         self._events[workload].append(now)
         self._prune(workload, now)
 
-    def snapshot(self, *, embedding_state: dict, rerank_state: dict) -> dict:
+    def snapshot(self, *, embedding_state: dict, rerank_state: dict, chat_state: dict | None = None) -> dict:
         now = self.clock()
         return {
             "embedding": self._workload_snapshot("embedding", now, embedding_state),
             "rerank": self._workload_snapshot("rerank", now, rerank_state),
+            "chat": self._workload_snapshot(
+                "chat",
+                now,
+                chat_state or {"queued": 0, "active": 0, "unfinished": 0},
+            ),
         }
 
     def _prune(self, workload: str, now: float) -> None:

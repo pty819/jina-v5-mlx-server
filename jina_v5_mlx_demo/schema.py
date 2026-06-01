@@ -89,8 +89,6 @@ class ChatCompletionRequest(BaseModel):
             raise ValueError("temperature must be >= 0")
         if not 0 <= self.top_p <= 1:
             raise ValueError("top_p must be between 0 and 1")
-        if self.stream is True:
-            raise ValueError("stream=true is not supported")
         if isinstance(self.stop, list) and not all(isinstance(item, str) for item in self.stop):
             raise ValueError("stop must be a string or a list of strings")
         return self

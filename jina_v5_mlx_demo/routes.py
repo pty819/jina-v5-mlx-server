@@ -1,5 +1,8 @@
+import json
 import time
 import uuid
+
+from fastapi.responses import StreamingResponse
 
 from jina_v5_mlx_demo.schema import (
     ChatCompletionRequest,
@@ -76,12 +79,34 @@ def _rerank_response_payload(*, model, response, return_documents, return_embedd
     }
 
 
-def register_chat_routes(router, chat_service, chat_queue, *, tags=None):
+def register_chat_routes(router, chat_service, chat_queue, metrics, *, tags=None):
     _tags = tags or []
 
     @router.post("/chat/completions", tags=_tags, summary="Create chat completion")
     async def chat_completions(request: ChatCompletionRequest):
         messages = [message.model_dump(exclude_none=True) for message in request.messages]
+        completion_id = f"chatcmpl-{uuid.uuid4().hex}"
+        created = int(time.time())
+        if request.stream:
+            stream = await chat_queue.open_stream(
+                messages,
+                max_tokens=request.max_tokens,
+                temperature=request.temperature,
+                top_p=request.top_p,
+                stop=request.stop,
+            )
+            metrics.record("chat")
+            return StreamingResponse(
+                _chat_completion_stream(
+                    stream,
+                    chat_service,
+                    completion_id=completion_id,
+                    created=created,
+                ),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+
         response = await chat_queue.complete(
             messages,
             max_tokens=request.max_tokens,
@@ -89,12 +114,13 @@ def register_chat_routes(router, chat_service, chat_queue, *, tags=None):
             top_p=request.top_p,
             stop=request.stop,
         )
+        metrics.record("chat")
         prompt_tokens = response["prompt_tokens"]
         completion_tokens = response["completion_tokens"]
         return {
-            "id": f"chatcmpl-{uuid.uuid4().hex}",
+            "id": completion_id,
             "object": "chat.completion",
-            "created": int(time.time()),
+            "created": created,
             "model": chat_service.model_id,
             "choices": [
                 {
@@ -112,3 +138,64 @@ def register_chat_routes(router, chat_service, chat_queue, *, tags=None):
                 "total_tokens": prompt_tokens + completion_tokens,
             },
         }
+
+
+async def _chat_completion_stream(
+    stream,
+    chat_service,
+    *,
+    completion_id,
+    created,
+):
+    yield _sse_data({
+        "id": completion_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": chat_service.model_id,
+        "choices": [
+            {
+                "index": 0,
+                "delta": {"role": "assistant"},
+                "finish_reason": None,
+            }
+        ],
+    })
+    async for chunk in stream:
+        if chunk["type"] == "content" and chunk["content"]:
+            yield _sse_data({
+                "id": completion_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": chat_service.model_id,
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"content": chunk["content"]},
+                        "finish_reason": None,
+                    }
+                ],
+            })
+        elif chunk["type"] == "final":
+            yield _sse_data({
+                "id": completion_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": chat_service.model_id,
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {},
+                        "finish_reason": chunk["finish_reason"],
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": chunk["prompt_tokens"],
+                    "completion_tokens": chunk["completion_tokens"],
+                    "total_tokens": chunk["prompt_tokens"] + chunk["completion_tokens"],
+                },
+            })
+    yield "data: [DONE]\n\n"
+
+
+def _sse_data(payload: dict) -> str:
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"

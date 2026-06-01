@@ -10,6 +10,7 @@ class RequestMetricsTest(unittest.TestCase):
 
         metrics.record("embedding")
         metrics.record("rerank")
+        metrics.record("chat")
         now[0] += 3_601
         metrics.record("rerank")
 
@@ -22,6 +23,7 @@ class RequestMetricsTest(unittest.TestCase):
         self.assertEqual(snapshot["embedding"]["requests_1d"], 1)
         self.assertEqual(snapshot["rerank"]["requests_1h"], 1)
         self.assertEqual(snapshot["rerank"]["requests_1d"], 2)
+        self.assertEqual(snapshot["chat"]["requests_1d"], 1)
         self.assertEqual(snapshot["embedding"]["unfinished"], 3)
 
     def test_fresh_store_resets_counts(self):
