@@ -1,12 +1,12 @@
 # Jina v5 MLX Server
 
-FastAPI serving for `jinaai/jina-embeddings-v5-text-small-retrieval-mlx` embeddings, `jinaai/jina-reranker-v3-mlx` reranking, and `mlx-community/Hy-MT2-1.8B-4bit` chat completions on Apple Silicon with MLX.
+FastAPI serving for `jinaai/jina-embeddings-v5-text-small-retrieval-mlx` embeddings, `mlx-community/jina-reranker-v3-4bit-mxfp4` reranking, and `mlx-community/Hy-MT2-1.8B-4bit` chat completions on Apple Silicon with MLX.
 
 The server provides embedding, reranking, and OpenAI-style chat completion endpoints from a single local process, with dynamic batching for embeddings, request-level queues for rerank/chat, idle model unloading, and operator stats.
 
 ## Features
 
-- Runs Jina v5 embedding and Jina v3 reranker MLX weights locally on macOS Apple Silicon.
+- Runs Jina v5 embedding, Jina v3 4-bit reranker, and Hy-MT2 4-bit chat MLX weights locally on macOS Apple Silicon.
 - **Embedding endpoints:**
   - `POST /v1/embeddings`
   - `POST /openai/v1/embeddings`
@@ -31,7 +31,7 @@ The server provides embedding, reranking, and OpenAI-style chat completion endpo
 - macOS on Apple Silicon.
 - Python managed by `uv`.
 - About 1.2 GB for embedding model weights.
-- About 600 MB for reranker model weights.
+- About 320 MB for 4-bit reranker model weights.
 - About 1.1 GB for Hy-MT2 1.8B 4-bit chat model weights.
 
 ## Setup
@@ -42,8 +42,8 @@ uv sync
 uv run hf download jinaai/jina-embeddings-v5-text-small-retrieval-mlx \
   --local-dir models/jina-embeddings-v5-text-small-retrieval-mlx
 
-uv run hf download jinaai/jina-reranker-v3-mlx \
-  --local-dir models/jina-reranker-v3-mlx
+uv run hf download mlx-community/jina-reranker-v3-4bit-mxfp4 \
+  --local-dir models/jina-reranker-v3-4bit-mxfp4
 
 uv run hf download mlx-community/Hy-MT2-1.8B-4bit \
   --local-dir models/Hy-MT2-1.8B-4bit
@@ -159,7 +159,7 @@ The `/openai/v1/rerank` route is a **local compatibility alias** that uses the s
 curl http://127.0.0.1:8000/v1/rerank \
   -H 'Content-Type: application/json' \
   -d '{
-    "model": "jina-reranker-v3",
+    "model": "jina-reranker-v3-4bit-mxfp4",
     "query": "What is MLX?",
     "documents": [
       "MLX is an array framework optimized for Apple silicon.",
@@ -176,7 +176,7 @@ Request fields:
 | --- | --- | --- | --- |
 | `query` | string | required | Non-empty query text |
 | `documents` | list[string] | required | Non-empty list of documents to rank |
-| `model` | string | null | Optional; accepts `jina-reranker-v3`, `jina-reranker-v3-mlx` |
+| `model` | string | null | Optional; accepts `jina-reranker-v3`, `jina-reranker-v3-mlx`, `jina-reranker-v3-4bit-mxfp4`, `mlx-community/jina-reranker-v3-4bit-mxfp4` |
 | `top_n` | int | null | Positive integer; omit to return all results |
 | `return_documents` | bool | true | Include document text in results |
 | `return_embeddings` | bool | false | Include document embeddings in results |
@@ -187,7 +187,7 @@ Extra request fields are rejected.
 
 ```json
 {
-  "model": "jina-reranker-v3",
+  "model": "jina-reranker-v3-4bit-mxfp4",
   "object": "list",
   "usage": {
     "total_tokens": 17
@@ -203,6 +203,10 @@ Extra request fields are rejected.
 ```
 
 `usage.total_tokens` is counted locally using the reranker tokenizer.
+
+The default reranker directory is `models/jina-reranker-v3-4bit-mxfp4`. The
+older official `jinaai/jina-reranker-v3-mlx` directory is still supported when
+passed explicitly with `--reranker-dir`, but it is no longer the default.
 
 ## Chat Completion Endpoints
 
@@ -344,7 +348,7 @@ reranker uses OpenViking's OpenAI-compatible rerank provider:
     "provider": "openai",
     "api_key": "local",
     "api_base": "http://127.0.0.1:8000/openai/v1/rerank",
-    "model": "jina-reranker-v3",
+    "model": "jina-reranker-v3-4bit-mxfp4",
     "threshold": 0.1
   }
 }

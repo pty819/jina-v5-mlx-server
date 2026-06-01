@@ -94,11 +94,11 @@ class RerankingServiceTest(unittest.TestCase):
         # "What is MLX?" = 3 words + "MLX is an array framework." = 5 words + "Another doc." = 2 words = 10
         self.assertEqual(result.total_tokens, 10)
 
-    def test_model_id_is_jina_reranker_v3(self):
+    def test_model_id_is_jina_reranker_v3_4bit(self):
         service = OfficialMLXRerankService(
             raw_reranker=FakeRawReranker(),
         )
-        self.assertEqual(service.model_id, "jina-reranker-v3")
+        self.assertEqual(service.model_id, "jina-reranker-v3-4bit-mxfp4")
 
 
 if __name__ == "__main__":

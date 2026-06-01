@@ -8,6 +8,7 @@ dependencies = [
     "fastapi",
     "huggingface-hub[hf_xet]",
     "mlx",
+    "mlx-embeddings>=0.1.0",
     "mlx-lm",
     "numpy",
     "safetensors",
