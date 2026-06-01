@@ -5,7 +5,7 @@ FastAPI serving for `jinaai/jina-embeddings-v5-text-small-retrieval-mlx` embeddi
 The recommended runtime is split into two processes:
 
 - Gateway/RAG process: FastAPI embedding, rerank, stats, model discovery, and chat proxy routes.
-- Chat process: `vllm-mlx serve mlx-community/Hy-MT2-1.8B-4bit` with continuous batching and KV-cache management.
+- Chat process: `vllm-mlx serve mlx-community/Hy-MT2-1.8B-4bit` tuned for short single-turn translation requests.
 
 ## Features
 
@@ -71,11 +71,17 @@ vllm-mlx serve models/Hy-MT2-1.8B-4bit \
   --host 127.0.0.1 \
   --port 8001 \
   --continuous-batching \
-  --enable-prefix-cache \
-  --use-paged-cache \
+  --disable-prefix-cache \
   --stream-interval 1 \
-  --max-tokens 4096 \
-  --max-request-tokens 4096
+  --max-tokens 1536 \
+  --max-request-tokens 1536 \
+  --max-num-seqs 4 \
+  --max-kv-size 3072 \
+  --prefill-batch-size 4 \
+  --completion-batch-size 8 \
+  --prefill-step-size 1024 \
+  --chunked-prefill-tokens 512 \
+  --gpu-memory-utilization 0.40
 ```
 
 Then start the gateway/RAG process:
@@ -260,7 +266,7 @@ POST /openai/v1/chat/completions
 By default these routes are gateway proxy routes. They forward the OpenAI-style
 request body to `--chat-upstream-base-url`, default
 `http://127.0.0.1:8001/v1`, where `vllm-mlx` owns chat inference,
-continuous batching, paged KV cache, and prefix cache.
+continuous batching, KV cache sizing, prefill/decode scheduling, and streaming.
 
 The gateway exposes the public model id `mlx-community/Hy-MT2-1.8B-4bit` and,
 by default, sends that same model id to vllm-mlx. The vllm-mlx command above
@@ -456,7 +462,12 @@ dynamic batching and rerank queue semantics.
 
 Chat completions are not generated in this process by default. The gateway only
 counts and forwards chat requests to vllm-mlx. vllm-mlx owns prefill/decode
-scheduling, continuous batching, paged KV cache, prefix cache, and streaming.
+scheduling, continuous batching, KV cache sizing, chunked prefill, and
+streaming.
+
+The default vllm-mlx launch script is tuned for translation-style traffic:
+single-turn requests, disposable KV cache, bounded output length, and low memory
+pressure. It disables prefix cache and caps request/output tokens at 1536.
 
 The legacy in-process chat path still exists behind
 `--disable-chat-proxy --enable-local-chat`, but it is not the recommended
