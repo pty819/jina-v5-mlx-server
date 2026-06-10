@@ -16,4 +16,8 @@ models/
 # Local runtime artifacts
 logs/
 .omc/
+.omx/
 .codegraph/
+
+# Local agent planning artifacts
+docs/superpowers/plans/
