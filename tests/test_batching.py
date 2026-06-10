@@ -43,6 +43,14 @@ class BlockingEmbeddingService(RecordingEmbeddingService):
         )
 
 
+class RecordingCacheTrimmer:
+    def __init__(self):
+        self.states = []
+
+    def trim_if_idle(self, state):
+        self.states.append(state)
+
+
 class DynamicBatcherTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.service = RecordingEmbeddingService()
@@ -128,6 +136,20 @@ class DynamicBatcherTest(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(batcher.queue_state()["unfinished"], 0)
+        await batcher.stop()
+
+    async def test_trims_cache_after_batch_finishes(self):
+        trimmer = RecordingCacheTrimmer()
+        batcher = DynamicBatcher(
+            self.service,
+            max_batch_size=1,
+            batch_timeout_ms=0,
+            cache_trimmer=trimmer,
+        )
+
+        await batcher.embed(["1"], task_type="retrieval.passage", dimensions=32, max_length=8192)
+
+        self.assertEqual(trimmer.states[-1]["unfinished"], 0)
         await batcher.stop()
 
 

@@ -13,9 +13,10 @@ class RerankJob:
 
 
 class RerankQueue:
-    def __init__(self, rerank_service, *, inference_gate: asyncio.Lock):
+    def __init__(self, rerank_service, *, inference_gate: asyncio.Lock, cache_trimmer=None):
         self.rerank_service = rerank_service
         self.inference_gate = inference_gate
+        self.cache_trimmer = cache_trimmer
         self._pending: list[RerankJob] = []
         self._condition = asyncio.Condition()
         self._worker_task: asyncio.Task | None = None
@@ -108,3 +109,8 @@ class RerankQueue:
                 future.set_exception(error)
         finally:
             self._active_jobs -= 1
+            self._trim_cache_if_idle()
+
+    def _trim_cache_if_idle(self):
+        if self.cache_trimmer is not None:
+            self.cache_trimmer.trim_if_idle(self.queue_state())

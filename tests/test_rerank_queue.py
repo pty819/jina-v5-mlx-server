@@ -68,6 +68,14 @@ class FailingRerankService:
         raise RuntimeError("model crash")
 
 
+class RecordingCacheTrimmer:
+    def __init__(self):
+        self.states = []
+
+    def trim_if_idle(self, state):
+        self.states.append(state)
+
+
 class RerankQueueTest(unittest.IsolatedAsyncioTestCase):
     async def test_returns_result_to_original_request(self):
         queue = RerankQueue(FakeRerankService(), inference_gate=asyncio.Lock())
@@ -107,6 +115,16 @@ class RerankQueueTest(unittest.IsolatedAsyncioTestCase):
         release.set()
         await task
         self.assertEqual(queue.queue_state()["unfinished"], 0)
+        await queue.stop()
+
+    async def test_trims_cache_after_job_finishes(self):
+        trimmer = RecordingCacheTrimmer()
+        queue = RerankQueue(FakeRerankService(), inference_gate=asyncio.Lock(), cache_trimmer=trimmer)
+        await queue.start()
+
+        await queue.rerank("query", ["doc"], top_n=1, return_embeddings=False)
+
+        self.assertEqual(trimmer.states[-1]["unfinished"], 0)
         await queue.stop()
 
 

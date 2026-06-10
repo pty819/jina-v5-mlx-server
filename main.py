@@ -70,6 +70,9 @@ def run_serve(args):
         length_tolerance=args.length_tolerance,
         default_max_length=args.max_length,
         max_chat_queue_size=args.max_chat_queue_size,
+        mlx_cache_limit_mb=args.mlx_cache_limit_mb,
+        mlx_memory_limit_mb=args.mlx_memory_limit_mb,
+        trim_mlx_cache_when_idle=not args.disable_mlx_cache_trim,
     )
     print(
         "Serving embeddings "
@@ -168,6 +171,9 @@ def main():
     serve_parser.add_argument("--length-tolerance", type=float, default=0.2)
     serve_parser.add_argument("--idle-seconds", type=int, default=1800, help="Unload models after N seconds idle (default: 1800)")
     serve_parser.add_argument("--max-chat-queue-size", type=int, default=32, help="Maximum queued chat completion requests")
+    serve_parser.add_argument("--mlx-cache-limit-mb", type=int, default=1024, help="MLX free cache limit in MB for embedding/rerank serving (default: 1024)")
+    serve_parser.add_argument("--mlx-memory-limit-mb", type=int, default=None, help="Optional MLX memory limit in MB")
+    serve_parser.add_argument("--disable-mlx-cache-trim", action="store_true", help="Do not clear unused MLX cache after embedding/rerank queues become idle")
     serve_parser.add_argument("--chat-model", default=CHAT_MODEL_ID, help="Public chat model id exposed by /v1/models")
     serve_parser.add_argument("--chat-upstream-base-url", default=DEFAULT_CHAT_UPSTREAM_BASE_URL, help="OpenAI-compatible vllm-mlx upstream base URL")
     serve_parser.add_argument("--chat-upstream-model", default=DEFAULT_CHAT_UPSTREAM_MODEL, help="Model name sent to the chat upstream; use empty string to preserve client model")

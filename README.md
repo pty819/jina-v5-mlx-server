@@ -96,6 +96,7 @@ uv run python main.py \
   --max-batch-tokens 8192 \
   --length-tolerance 0.2 \
   --max-length 8192 \
+  --mlx-cache-limit-mb 1024 \
   --chat-upstream-base-url http://127.0.0.1:8001/v1 \
   --chat-upstream-model mlx-community/Hy-MT2-1.8B-4bit
 ```
@@ -459,6 +460,13 @@ The gateway process keeps embedding and rerank under one process-local
 `asyncio.Lock` inference gate. Only one embedding/rerank MLX model call enters
 that gate at a time. This avoids local contention while preserving embedding
 dynamic batching and rerank queue semantics.
+
+By default the gateway caps MLX free cache at `1024 MB` with
+`--mlx-cache-limit-mb 1024` and clears unused cache after embedding/rerank queues
+become idle. This keeps long-running embedding/rerank serving from retaining a
+large Metal cache after bursts. Set `--disable-mlx-cache-trim` to favor throughput
+over memory release, or tune `--mlx-cache-limit-mb` / `--mlx-memory-limit-mb`
+for a different memory profile.
 
 Chat completions are not generated in this process by default. The gateway only
 counts and forwards chat requests to vllm-mlx. vllm-mlx owns prefill/decode

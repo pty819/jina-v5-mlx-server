@@ -29,6 +29,7 @@ class DynamicBatcher:
         max_batch_tokens: int = 8192,
         length_tolerance: float = 0.2,
         inference_gate: asyncio.Lock | None = None,
+        cache_trimmer=None,
     ):
         if max_batch_size < 1:
             raise ValueError("max_batch_size must be >= 1")
@@ -45,6 +46,7 @@ class DynamicBatcher:
         self.max_batch_tokens = max_batch_tokens
         self.length_tolerance = length_tolerance
         self.inference_gate = inference_gate or asyncio.Lock()
+        self.cache_trimmer = cache_trimmer
         self._active_jobs = 0
         self._pending: list[BatchJob] = []
         self._condition = asyncio.Condition()
@@ -186,7 +188,12 @@ class DynamicBatcher:
             return
         finally:
             self._active_jobs -= len(batch)
+            self._trim_cache_if_idle()
 
         for job, embedding in zip(batch, embeddings):
             if not job.future.done():
                 job.future.set_result(embedding)
+
+    def _trim_cache_if_idle(self):
+        if self.cache_trimmer is not None:
+            self.cache_trimmer.trim_if_idle(self.queue_state())

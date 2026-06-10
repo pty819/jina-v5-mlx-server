@@ -1,7 +1,6 @@
 import asyncio
 from contextlib import asynccontextmanager
 
-import mlx.core as mx
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -9,6 +8,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from jina_v5_mlx_demo.batching import DynamicBatcher
 from jina_v5_mlx_demo.chat_queue import ChatQueue
 from jina_v5_mlx_demo.metrics import RequestMetrics
+from jina_v5_mlx_demo.mlx_memory import MLXMemoryManager
 from jina_v5_mlx_demo.rerank_queue import RerankQueue
 from jina_v5_mlx_demo.routes import (
     register_chat_proxy_routes,
@@ -33,8 +33,19 @@ def create_app(
     length_tolerance: float = 0.2,
     default_max_length: int = 8192,
     max_chat_queue_size: int = 32,
+    mlx_memory_manager: MLXMemoryManager | None = None,
+    mlx_cache_limit_mb: int | None = None,
+    mlx_memory_limit_mb: int | None = None,
+    trim_mlx_cache_when_idle: bool = True,
 ) -> FastAPI:
     parse_max_length(default_max_length)
+
+    memory_manager = mlx_memory_manager or MLXMemoryManager(
+        cache_limit_mb=mlx_cache_limit_mb,
+        memory_limit_mb=mlx_memory_limit_mb,
+        trim_cache_when_idle=trim_mlx_cache_when_idle,
+    )
+    memory_manager.configure()
 
     inference_gate = asyncio.Lock()
     batcher = DynamicBatcher(
@@ -44,10 +55,11 @@ def create_app(
         max_batch_tokens=max_batch_tokens,
         length_tolerance=length_tolerance,
         inference_gate=inference_gate,
+        cache_trimmer=memory_manager,
     )
 
     rerank_queue = (
-        RerankQueue(rerank_service, inference_gate=inference_gate)
+        RerankQueue(rerank_service, inference_gate=inference_gate, cache_trimmer=memory_manager)
         if rerank_service is not None
         else None
     )
@@ -111,10 +123,7 @@ def create_app(
             rerank_state=rerank_queue.queue_state() if rerank_queue else {"queued": 0, "active": 0, "unfinished": 0},
             chat_state=_chat_state(chat_queue=chat_queue, chat_proxy=chat_proxy),
         )
-        snapshot["mlx_memory"] = {
-            "active_mb": round(mx.get_active_memory() / 1024**2),
-            "cache_mb": round(mx.get_cache_memory() / 1024**2),
-        }
+        snapshot["mlx_memory"] = memory_manager.snapshot()
         return snapshot
 
     @utils_router.get("/stats", tags=["Utils"], summary="Stats dashboard")

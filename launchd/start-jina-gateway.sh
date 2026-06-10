@@ -22,5 +22,6 @@ exec "${PROJECT_DIR}/.venv/bin/python" "${PROJECT_DIR}/main.py" \
   --max-batch-tokens 8192 \
   --length-tolerance 0.2 \
   --max-length 8192 \
+  --mlx-cache-limit-mb 1024 \
   --chat-upstream-base-url http://127.0.0.1:8001/v1 \
   --chat-upstream-model mlx-community/Hy-MT2-1.8B-4bit
