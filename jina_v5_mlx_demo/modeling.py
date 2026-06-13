@@ -14,13 +14,25 @@ MODEL_ID = "jina-embeddings-v5-text-small"
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_MODEL_DIR = PROJECT_DIR / "models" / "jina-embeddings-v5-text-small-retrieval-mlx"
 
-DEFAULT_IDLE_SECONDS = 30 * 60
+DEFAULT_IDLE_SECONDS = 20 * 60
+
+
+def _clear_mlx_cache():
+    mx.clear_cache()
+    mx.synchronize()
 
 
 class MLXEmbeddingService:
-    def __init__(self, model_dir: Path = DEFAULT_MODEL_DIR, *, idle_seconds: int = DEFAULT_IDLE_SECONDS):
+    def __init__(
+        self,
+        model_dir: Path = DEFAULT_MODEL_DIR,
+        *,
+        idle_seconds: int = DEFAULT_IDLE_SECONDS,
+        clear_cache_after_inference: bool = True,
+    ):
         self.model_id = MODEL_ID
         self.model_dir = model_dir
+        self.clear_cache_after_inference = clear_cache_after_inference
         self._model = None
         self._tokenizer = None
         self._load_lock = threading.Lock()
@@ -40,16 +52,20 @@ class MLXEmbeddingService:
     ) -> list[list[float]]:
         model, tokenizer = self._load()
         self._evictor.touch()
-        with self._encode_lock:
-            embeddings = model.encode(
-                texts,
-                tokenizer,
-                task_type=task_type,
-                truncate_dim=dimensions,
-                max_length=max_length,
-            )
-            mx.eval(embeddings)
-        return embeddings.tolist()
+        try:
+            with self._encode_lock:
+                embeddings = model.encode(
+                    texts,
+                    tokenizer,
+                    task_type=task_type,
+                    truncate_dim=dimensions,
+                    max_length=max_length,
+                )
+                mx.eval(embeddings)
+                return embeddings.tolist()
+        finally:
+            if self.clear_cache_after_inference:
+                _clear_mlx_cache()
 
     def count_tokens(self, texts: list[str], task_type: str) -> int:
         _, tokenizer = self._load()
@@ -69,8 +85,7 @@ class MLXEmbeddingService:
                 self._model = None
                 self._tokenizer = None
                 gc.collect()
-                mx.clear_cache()
-                mx.synchronize()
+                _clear_mlx_cache()
 
     def _load(self):
         if self._model is not None and self._tokenizer is not None:

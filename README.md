@@ -1,6 +1,6 @@
 # Jina v5 MLX Server
 
-FastAPI serving for `jinaai/jina-embeddings-v5-text-small-retrieval-mlx` embeddings and `mlx-community/jina-reranker-v3-4bit-mxfp4` reranking on Apple Silicon with MLX, plus OpenAI-style chat proxying to a dedicated `vllm-mlx` server.
+FastAPI serving for `jinaai/jina-embeddings-v5-text-small-retrieval-mlx` embeddings and a local Prism Qwen3.5 OptIQ reranker on Apple Silicon with MLX, plus OpenAI-style chat proxying to a dedicated `vllm-mlx` server.
 
 The recommended runtime is split into two processes:
 
@@ -9,7 +9,7 @@ The recommended runtime is split into two processes:
 
 ## Features
 
-- Runs Jina v5 embedding and Jina v3 4-bit reranker weights locally on macOS Apple Silicon.
+- Runs Jina v5 embedding and Prism Qwen3.5 OptIQ reranker weights locally on macOS Apple Silicon.
 - Proxies Hy-MT2 chat completions to a separate `vllm-mlx` OpenAI-compatible server.
 - **Embedding endpoints:**
   - `POST /v1/embeddings`
@@ -39,7 +39,7 @@ The recommended runtime is split into two processes:
 - Python managed by `uv`.
 - `vllm-mlx` installed as a separate CLI for chat serving.
 - About 1.2 GB for embedding model weights.
-- About 320 MB for 4-bit reranker model weights.
+- About 630 MB for Prism OptIQ mixed 4/8-bit reranker model weights.
 - About 1.1 GB for Hy-MT2 1.8B 4-bit chat model weights in the vllm-mlx process.
 
 ## Setup
@@ -50,8 +50,8 @@ uv sync
 uv run hf download jinaai/jina-embeddings-v5-text-small-retrieval-mlx \
   --local-dir models/jina-embeddings-v5-text-small-retrieval-mlx
 
-uv run hf download mlx-community/jina-reranker-v3-4bit-mxfp4 \
-  --local-dir models/jina-reranker-v3-4bit-mxfp4
+uv run hf download pty819/prism-qwen3.5-reranker-0.8b-optiq-5bpw-cal24 \
+  --local-dir models/pty819/prism-qwen3.5-reranker-0.8b-optiq-5bpw-cal24
 
 uv run hf download mlx-community/Hy-MT2-1.8B-4bit \
   --local-dir models/Hy-MT2-1.8B-4bit
@@ -96,7 +96,8 @@ uv run python main.py \
   --max-batch-tokens 8192 \
   --length-tolerance 0.2 \
   --max-length 8192 \
-  --mlx-cache-limit-mb 1024 \
+  --idle-seconds 1200 \
+  --mlx-cache-limit-mb 0 \
   --chat-upstream-base-url http://127.0.0.1:8001/v1 \
   --chat-upstream-model mlx-community/Hy-MT2-1.8B-4bit
 ```
@@ -206,7 +207,7 @@ The `/openai/v1/rerank` route is a **local compatibility alias** that uses the s
 curl http://127.0.0.1:8000/v1/rerank \
   -H 'Content-Type: application/json' \
   -d '{
-    "model": "jina-reranker-v3-4bit-mxfp4",
+    "model": "pty819/prism-qwen3.5-reranker-0.8b-optiq-5bpw-cal24",
     "query": "What is MLX?",
     "documents": [
       "MLX is an array framework optimized for Apple silicon.",
@@ -223,10 +224,10 @@ Request fields:
 | --- | --- | --- | --- |
 | `query` | string | required | Non-empty query text |
 | `documents` | list[string] | required | Non-empty list of documents to rank |
-| `model` | string | null | Optional; accepts `jina-reranker-v3`, `jina-reranker-v3-mlx`, `jina-reranker-v3-4bit-mxfp4`, `mlx-community/jina-reranker-v3-4bit-mxfp4` |
+| `model` | string | null | Optional; accepts `pty819/prism-qwen3.5-reranker-0.8b-optiq-5bpw-cal24` and Prism short aliases |
 | `top_n` | int | null | Positive integer; omit to return all results |
 | `return_documents` | bool | true | Include document text in results |
-| `return_embeddings` | bool | false | Include document embeddings in results |
+| `return_embeddings` | bool | false | Legacy compatibility field. Prism scoring does not produce document embeddings, so returned embeddings are `null` when this is set. |
 
 Extra request fields are rejected.
 
@@ -234,7 +235,7 @@ Extra request fields are rejected.
 
 ```json
 {
-  "model": "jina-reranker-v3-4bit-mxfp4",
+  "model": "pty819/prism-qwen3.5-reranker-0.8b-optiq-5bpw-cal24",
   "object": "list",
   "usage": {
     "total_tokens": 17
@@ -251,9 +252,8 @@ Extra request fields are rejected.
 
 `usage.total_tokens` is counted locally using the reranker tokenizer.
 
-The default reranker directory is `models/jina-reranker-v3-4bit-mxfp4`. The
-older official `jinaai/jina-reranker-v3-mlx` directory is still supported when
-passed explicitly with `--reranker-dir`, but it is no longer the default.
+The default reranker directory is
+`models/pty819/prism-qwen3.5-reranker-0.8b-optiq-5bpw-cal24`.
 
 ## Chat Completion Endpoints
 
@@ -355,7 +355,7 @@ The response is OpenAI-style:
       "capabilities": ["embeddings"]
     },
     {
-      "id": "jina-reranker-v3-4bit-mxfp4",
+      "id": "pty819/prism-qwen3.5-reranker-0.8b-optiq-5bpw-cal24",
       "object": "model",
       "created": 0,
       "owned_by": "local",
@@ -461,12 +461,14 @@ The gateway process keeps embedding and rerank under one process-local
 that gate at a time. This avoids local contention while preserving embedding
 dynamic batching and rerank queue semantics.
 
-By default the gateway caps MLX free cache at `1024 MB` with
-`--mlx-cache-limit-mb 1024` and clears unused cache after embedding/rerank queues
-become idle. This keeps long-running embedding/rerank serving from retaining a
-large Metal cache after bursts. Set `--disable-mlx-cache-trim` to favor throughput
-over memory release, or tune `--mlx-cache-limit-mb` / `--mlx-memory-limit-mb`
-for a different memory profile.
+By default the gateway sets the MLX free cache limit to `0 MB` with
+`--mlx-cache-limit-mb 0` and clears unused cache after every embedding/rerank
+inference path and again after queues become idle. This favors low resident
+memory over a warm allocator cache. Embedding and rerank models unload after
+20 minutes of inactivity by default (`--idle-seconds 1200`); unloading drops the
+model references, runs Python GC, and clears MLX free cache. Set
+`--disable-mlx-cache-trim` only to disable the queue-idle trim, or tune
+`--mlx-cache-limit-mb` / `--mlx-memory-limit-mb` for a different memory profile.
 
 Chat completions are not generated in this process by default. The gateway only
 counts and forwards chat requests to vllm-mlx. vllm-mlx owns prefill/decode
@@ -504,7 +506,7 @@ reranker uses OpenViking's OpenAI-compatible rerank provider:
     "provider": "openai",
     "api_key": "local",
     "api_base": "http://127.0.0.1:8000/openai/v1/rerank",
-    "model": "jina-reranker-v3-4bit-mxfp4",
+    "model": "pty819/prism-qwen3.5-reranker-0.8b-optiq-5bpw-cal24",
     "threshold": 0.1
   }
 }

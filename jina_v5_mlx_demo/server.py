@@ -34,7 +34,7 @@ def create_app(
     default_max_length: int = 8192,
     max_chat_queue_size: int = 32,
     mlx_memory_manager: MLXMemoryManager | None = None,
-    mlx_cache_limit_mb: int | None = None,
+    mlx_cache_limit_mb: int | None = 0,
     mlx_memory_limit_mb: int | None = None,
     trim_mlx_cache_when_idle: bool = True,
 ) -> FastAPI:

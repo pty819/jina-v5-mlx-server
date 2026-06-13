@@ -1,7 +1,7 @@
 [project]
 name = "jina-v5-mlx-server"
 version = "0.2.0"
-description = "Local Jina v5 embedding and v3 reranker serving with MLX on Apple Silicon"
+description = "Local Jina v5 embedding, Prism rerank, and MLX chat gateway serving on Apple Silicon"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -11,7 +11,6 @@ dependencies = [
     "mlx",
     "mlx-embeddings>=0.1.0",
     "mlx-lm",
-    "numpy",
     "safetensors",
     "tokenizers",
     "uvicorn[standard]",

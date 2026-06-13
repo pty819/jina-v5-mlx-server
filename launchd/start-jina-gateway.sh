@@ -12,7 +12,7 @@ export PYTHONPATH="${PROJECT_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
 
 exec "${PROJECT_DIR}/.venv/bin/python" "${PROJECT_DIR}/main.py" \
   --model-dir "${PROJECT_DIR}/models/jina-embeddings-v5-text-small-retrieval-mlx" \
-  --reranker-dir "${PROJECT_DIR}/models/jina-reranker-v3-4bit-mxfp4" \
+  --reranker-dir "${PROJECT_DIR}/models/pty819/prism-qwen3.5-reranker-0.8b-optiq-5bpw-cal24" \
   --chat-model-dir "${PROJECT_DIR}/models/Hy-MT2-1.8B-4bit" \
   serve \
   --host 0.0.0.0 \
@@ -22,6 +22,7 @@ exec "${PROJECT_DIR}/.venv/bin/python" "${PROJECT_DIR}/main.py" \
   --max-batch-tokens 8192 \
   --length-tolerance 0.2 \
   --max-length 8192 \
-  --mlx-cache-limit-mb 1024 \
+  --idle-seconds 1200 \
+  --mlx-cache-limit-mb 0 \
   --chat-upstream-base-url http://127.0.0.1:8001/v1 \
   --chat-upstream-model mlx-community/Hy-MT2-1.8B-4bit

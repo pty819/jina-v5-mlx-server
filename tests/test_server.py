@@ -43,7 +43,7 @@ class FakeEmbeddingService:
 
 
 class FakeRerankService:
-    model_id = "jina-reranker-v3-4bit-mxfp4"
+    model_id = "pty819/prism-qwen3.5-reranker-0.8b-optiq-5bpw-cal24"
 
     def rerank(self, query, documents, *, top_n, return_embeddings):
         results = []
@@ -233,7 +233,7 @@ class CombinedServerTest(unittest.TestCase):
         response = self.client.post(
             "/jina/v1/rerank",
             json={
-                "model": "jina-reranker-v3-4bit-mxfp4",
+                "model": "pty819/prism-qwen3.5-reranker-0.8b-optiq-5bpw-cal24",
                 "query": "question",
                 "documents": ["first", "second"],
                 "top_n": 1,
@@ -245,7 +245,7 @@ class CombinedServerTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertEqual(body["object"], "list")
-        self.assertEqual(body["model"], "jina-reranker-v3-4bit-mxfp4")
+        self.assertEqual(body["model"], "pty819/prism-qwen3.5-reranker-0.8b-optiq-5bpw-cal24")
         self.assertEqual(body["usage"]["total_tokens"], 3)
         self.assertEqual(body["results"][0]["index"], 0)
         self.assertEqual(body["results"][0]["document"], "first")
@@ -377,7 +377,7 @@ class CombinedServerTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertEqual(body["embedding_model"], "fake-embedding-model")
-        self.assertEqual(body["rerank_model"], "jina-reranker-v3-4bit-mxfp4")
+        self.assertEqual(body["rerank_model"], "pty819/prism-qwen3.5-reranker-0.8b-optiq-5bpw-cal24")
         self.assertEqual(body["chat_model"], "fake-chat-model")
 
     def test_openai_chat_completions_endpoint(self):
@@ -613,7 +613,7 @@ class ChatProxyServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         model_ids = {item["id"] for item in response.json()["data"]}
         self.assertIn("fake-embedding-model", model_ids)
-        self.assertIn("jina-reranker-v3-4bit-mxfp4", model_ids)
+        self.assertIn("pty819/prism-qwen3.5-reranker-0.8b-optiq-5bpw-cal24", model_ids)
         self.assertIn("public-chat-model", model_ids)
 
     def test_openai_models_alias(self):

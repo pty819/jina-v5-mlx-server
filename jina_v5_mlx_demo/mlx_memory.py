@@ -15,7 +15,7 @@ class MLXMemoryManager:
     def __init__(
         self,
         *,
-        cache_limit_mb: int | None = None,
+        cache_limit_mb: int | None = 0,
         memory_limit_mb: int | None = None,
         trim_cache_when_idle: bool = True,
     ):

@@ -5,6 +5,14 @@ from jina_v5_mlx_demo.mlx_memory import MLXMemoryManager
 
 
 class MLXMemoryManagerTest(unittest.TestCase):
+    def test_defaults_to_zero_free_cache_limit(self):
+        manager = MLXMemoryManager()
+
+        with patch("jina_v5_mlx_demo.mlx_memory.mx.set_cache_limit") as set_cache_limit:
+            manager.configure()
+
+        set_cache_limit.assert_called_once_with(0)
+
     def test_configures_cache_and_memory_limits_in_bytes(self):
         manager = MLXMemoryManager(cache_limit_mb=1024, memory_limit_mb=4096)
 
