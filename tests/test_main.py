@@ -10,7 +10,7 @@ class ServeDefaultsTest(unittest.TestCase):
         with (
             patch("sys.argv", ["main.py", "serve"]),
             patch("main.MLXEmbeddingService") as embedding_service,
-            patch("main.OfficialMLXRerankService") as rerank_service,
+            patch("main.MLXRerankService") as rerank_service,
             patch("main.ChatProxyClient") as chat_proxy,
             patch("main.create_app") as create_app,
             patch("main.uvicorn.run"),

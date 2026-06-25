@@ -1,6 +1,6 @@
 # Jina v5 MLX Server
 
-FastAPI serving for `jinaai/jina-embeddings-v5-text-small-retrieval-mlx` embeddings and a local Prism Qwen3.5 OptIQ reranker on Apple Silicon with MLX, plus OpenAI-style chat proxying to a dedicated `vllm-mlx` server.
+FastAPI serving for `jinaai/jina-embeddings-v5-text-small-retrieval-mlx` embeddings and the official `jinaai/jina-reranker-v3-mlx` listwise reranker on Apple Silicon with MLX, plus OpenAI-style chat proxying to a dedicated `vllm-mlx` server.
 
 The recommended runtime is split into two processes:
 
@@ -9,7 +9,7 @@ The recommended runtime is split into two processes:
 
 ## Features
 
-- Runs Jina v5 embedding and Prism Qwen3.5 OptIQ reranker weights locally on macOS Apple Silicon.
+- Runs Jina v5 embedding and Jina Reranker v3 (official MLX port) weights locally on macOS Apple Silicon.
 - Proxies Hy-MT2 chat completions to a separate `vllm-mlx` OpenAI-compatible server.
 - **Embedding endpoints:**
   - `POST /v1/embeddings`
@@ -39,7 +39,7 @@ The recommended runtime is split into two processes:
 - Python managed by `uv`.
 - `vllm-mlx` installed as a separate CLI for chat serving.
 - About 1.2 GB for embedding model weights.
-- About 630 MB for Prism OptIQ mixed 4/8-bit reranker model weights.
+- About 630 MB for the Jina Reranker v3 MLX reranker model weights (~1.2 GB backbone + 3 MB projector).
 - About 1.1 GB for Hy-MT2 1.8B 4-bit chat model weights in the vllm-mlx process.
 
 ## Setup
@@ -50,8 +50,8 @@ uv sync
 uv run hf download jinaai/jina-embeddings-v5-text-small-retrieval-mlx \
   --local-dir models/jina-embeddings-v5-text-small-retrieval-mlx
 
-uv run hf download pty819/prism-qwen3.5-reranker-0.8b-optiq-5bpw-cal24 \
-  --local-dir models/pty819/prism-qwen3.5-reranker-0.8b-optiq-5bpw-cal24
+uv run hf download jinaai/jina-reranker-v3-mlx \
+  --local-dir models/jinaai/jina-reranker-v3-mlx
 
 uv run hf download mlx-community/Hy-MT2-1.8B-4bit \
   --local-dir models/Hy-MT2-1.8B-4bit
@@ -207,7 +207,7 @@ The `/openai/v1/rerank` route is a **local compatibility alias** that uses the s
 curl http://127.0.0.1:8000/v1/rerank \
   -H 'Content-Type: application/json' \
   -d '{
-    "model": "pty819/prism-qwen3.5-reranker-0.8b-optiq-5bpw-cal24",
+    "model": "jinaai/jina-reranker-v3-mlx",
     "query": "What is MLX?",
     "documents": [
       "MLX is an array framework optimized for Apple silicon.",
@@ -224,10 +224,10 @@ Request fields:
 | --- | --- | --- | --- |
 | `query` | string | required | Non-empty query text |
 | `documents` | list[string] | required | Non-empty list of documents to rank |
-| `model` | string | null | Optional; accepts `pty819/prism-qwen3.5-reranker-0.8b-optiq-5bpw-cal24` and Prism short aliases |
+| `model` | string | null | Optional; accepts `jinaai/jina-reranker-v3-mlx` and short aliases (`jina-reranker-v3-mlx`, `jina-reranker-v3`) |
 | `top_n` | int | null | Positive integer; omit to return all results |
 | `return_documents` | bool | true | Include document text in results |
-| `return_embeddings` | bool | false | Legacy compatibility field. Prism scoring does not produce document embeddings, so returned embeddings are `null` when this is set. |
+| `return_embeddings` | bool | false | Legacy compatibility field. The reranker only produces rankings and scores, so returned embeddings are always `null` when this is set. |
 
 Extra request fields are rejected.
 
@@ -235,7 +235,7 @@ Extra request fields are rejected.
 
 ```json
 {
-  "model": "pty819/prism-qwen3.5-reranker-0.8b-optiq-5bpw-cal24",
+  "model": "jinaai/jina-reranker-v3-mlx",
   "object": "list",
   "usage": {
     "total_tokens": 17
@@ -252,8 +252,13 @@ Extra request fields are rejected.
 
 `usage.total_tokens` is counted locally using the reranker tokenizer.
 
+Jina Reranker v3 is a **listwise** reranker: all candidate passages and the query
+share one context window so documents attend to each other via causal
+self-attention. Scores are cosine similarities in `[-1, 1]`, not sigmoid
+probabilities.
+
 The default reranker directory is
-`models/pty819/prism-qwen3.5-reranker-0.8b-optiq-5bpw-cal24`.
+`models/jinaai/jina-reranker-v3-mlx`.
 
 ## Chat Completion Endpoints
 
@@ -355,7 +360,7 @@ The response is OpenAI-style:
       "capabilities": ["embeddings"]
     },
     {
-      "id": "pty819/prism-qwen3.5-reranker-0.8b-optiq-5bpw-cal24",
+      "id": "jinaai/jina-reranker-v3-mlx",
       "object": "model",
       "created": 0,
       "owned_by": "local",
@@ -506,7 +511,7 @@ reranker uses OpenViking's OpenAI-compatible rerank provider:
     "provider": "openai",
     "api_key": "local",
     "api_base": "http://127.0.0.1:8000/openai/v1/rerank",
-    "model": "pty819/prism-qwen3.5-reranker-0.8b-optiq-5bpw-cal24",
+    "model": "jinaai/jina-reranker-v3-mlx",
     "threshold": 0.1
   }
 }
@@ -625,8 +630,8 @@ Reranking (requires model weights downloaded):
 
 ```bash
 uv run python -c "
-from jina_v5_mlx_demo.reranking import OfficialMLXRerankService
-service = OfficialMLXRerankService()
+from jina_v5_mlx_demo.reranking import MLXRerankService
+service = MLXRerankService()
 print(service.rerank('What is MLX?', ['MLX runs on Apple silicon.'], top_n=1))
 "
 ```

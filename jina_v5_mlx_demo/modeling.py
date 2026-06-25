@@ -112,8 +112,21 @@ class MLXEmbeddingService:
 
             with (model_dir / "config.json").open() as f:
                 config = json.load(f)
+            # ``quantization`` is metadata for MLX loaders, not a model arg.
+            quant_cfg = config.pop("quantization", None)
 
             model = model_module.JinaEmbeddingModel(config)
+            # If the weights are quantized, swap Linear -> QuantizedLinear so the
+            # packed weight/scales/biases keys line up with the model structure.
+            # Match the quantization script: Linear only, leave Embedding in fp16.
+            if quant_cfg is not None:
+                import mlx.nn as nn
+                nn.quantize(
+                    model,
+                    group_size=quant_cfg.get("group_size", 64),
+                    bits=quant_cfg.get("bits", 8),
+                    class_predicate=lambda _path, m: isinstance(m, nn.Linear),
+                )
             weights = mx.load(str(model_dir / "model.safetensors"))
             if not isinstance(weights, dict):
                 raise RuntimeError(f"Expected safetensors dict from {model_dir / 'model.safetensors'}")

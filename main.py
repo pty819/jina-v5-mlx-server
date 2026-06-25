@@ -11,7 +11,7 @@ from jina_v5_mlx_demo.chat_proxy import (
     ChatProxyClient,
 )
 from jina_v5_mlx_demo.modeling import DEFAULT_MODEL_DIR, MLXEmbeddingService
-from jina_v5_mlx_demo.reranking import DEFAULT_RERANKER_DIR, OfficialMLXRerankService
+from jina_v5_mlx_demo.reranking import DEFAULT_RERANKER_DIR, MLXRerankService
 from jina_v5_mlx_demo.server import create_app
 
 
@@ -46,7 +46,7 @@ def run_embed(args):
 
 def run_serve(args):
     embedding_service = MLXEmbeddingService(args.model_dir, idle_seconds=args.idle_seconds)
-    rerank_service = OfficialMLXRerankService(args.reranker_dir, idle_seconds=args.idle_seconds)
+    rerank_service = MLXRerankService(args.reranker_dir, idle_seconds=args.idle_seconds)
     chat_proxy = None
     chat_service = None
     if not args.disable_chat_proxy:

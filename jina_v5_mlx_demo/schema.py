@@ -105,9 +105,9 @@ VALID_TASK_TYPES = {
 VALID_DIMENSIONS = {32, 64, 128, 256, 512, 768, 1024}
 VALID_MAX_LENGTH_RANGE = range(1, 32769)
 VALID_RERANK_MODELS = {
-    "pty819/prism-qwen3.5-reranker-0.8b-optiq-5bpw-cal24",
-    "prism-qwen3.5-reranker-0.8b",
-    "prism-qwen3.5-reranker-0.8b-optiq-5bpw",
+    "jinaai/jina-reranker-v3-mlx",
+    "jina-reranker-v3-mlx",
+    "jina-reranker-v3",
 }
 QUERY_MODEL_ALIASES = {
     "jina-v5-query",

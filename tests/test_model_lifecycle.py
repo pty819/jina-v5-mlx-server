@@ -4,7 +4,7 @@ from unittest.mock import patch
 from jina_v5_mlx_demo.modeling import DEFAULT_IDLE_SECONDS as EMBEDDING_IDLE_SECONDS
 from jina_v5_mlx_demo.modeling import MLXEmbeddingService
 from jina_v5_mlx_demo.reranking import DEFAULT_IDLE_SECONDS as RERANK_IDLE_SECONDS
-from jina_v5_mlx_demo.reranking import OfficialMLXRerankService
+from jina_v5_mlx_demo.reranking import MLXRerankService
 
 
 class FakeEmbeddingModel:
@@ -53,7 +53,7 @@ class ModelLifecycleTest(unittest.TestCase):
         synchronize.assert_called_once_with()
 
     def test_rerank_clears_mlx_cache_after_inference(self):
-        service = OfficialMLXRerankService(
+        service = MLXRerankService(
             raw_reranker=FakeReranker(),
             token_counter=lambda query, docs: 3,
         )
