@@ -116,20 +116,31 @@ class MLXEmbeddingService:
             quant_cfg = config.pop("quantization", None)
 
             model = model_module.JinaEmbeddingModel(config)
+            weights = mx.load(str(model_dir / "model.safetensors"))
+            if not isinstance(weights, dict):
+                raise RuntimeError(f"Expected safetensors dict from {model_dir / 'model.safetensors'}")
             # If the weights are quantized, swap Linear -> QuantizedLinear so the
             # packed weight/scales/biases keys line up with the model structure.
-            # Match the quantization script: Linear only, leave Embedding in fp16.
+            # Only layers that were actually quantized (i.e. have ``.scales`` in
+            # the weight file) are converted — matching mlx-lm's loader, so an
+            # nvfp4 group_size of 16 etc. don't trip affine-only validation on
+            # unquantized layers. Embedding stays in fp16.
             if quant_cfg is not None:
                 import mlx.nn as nn
+                weight_keys = set(weights.keys())
+
+                def _quant_predicate(path: str, module) -> bool:
+                    if not isinstance(module, nn.Linear):
+                        return False
+                    return f"{path}.scales" in weight_keys
+
                 nn.quantize(
                     model,
                     group_size=quant_cfg.get("group_size", 64),
                     bits=quant_cfg.get("bits", 8),
-                    class_predicate=lambda _path, m: isinstance(m, nn.Linear),
+                    mode=quant_cfg.get("mode", "affine"),
+                    class_predicate=_quant_predicate,
                 )
-            weights = mx.load(str(model_dir / "model.safetensors"))
-            if not isinstance(weights, dict):
-                raise RuntimeError(f"Expected safetensors dict from {model_dir / 'model.safetensors'}")
             model.load_weights(list(weights.items()))
 
             self._model = model

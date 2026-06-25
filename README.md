@@ -51,7 +51,7 @@ uv run hf download jinaai/jina-embeddings-v5-text-small-retrieval-mlx \
   --local-dir models/jina-embeddings-v5-text-small-retrieval-mlx
 
 uv run hf download jinaai/jina-reranker-v3-mlx \
-  --local-dir models/jinaai/jina-reranker-v3-mlx
+  --local-dir models/jina-reranker-v3-mlx
 
 uv run hf download mlx-community/Hy-MT2-1.8B-4bit \
   --local-dir models/Hy-MT2-1.8B-4bit
@@ -257,8 +257,8 @@ share one context window so documents attend to each other via causal
 self-attention. Scores are cosine similarities in `[-1, 1]`, not sigmoid
 probabilities.
 
-The default reranker directory is
-`models/jinaai/jina-reranker-v3-mlx`.
+`models/jina-reranker-v3-mlx-8bit` is the active reranker directory; the fp16
+source lives at `models/jina-reranker-v3-mlx` for re-quantization.
 
 ## Chat Completion Endpoints
 

@@ -326,7 +326,7 @@ class MLXRerankService:
                     f"Reranker not found at {model_dir}. Run: "
                     "uv run hf download "
                     f"{DEFAULT_JINA_RERANKER_REPO_ID} "
-                    "--local-dir models/jinaai/jina-reranker-v3-mlx"
+                    "--local-dir models/jina-reranker-v3-mlx"
                 )
             raw = JinaV3Reranker(model_dir)
             self._raw_reranker = raw

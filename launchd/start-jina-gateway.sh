@@ -12,7 +12,7 @@ export PYTHONPATH="${PROJECT_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
 
 exec "${PROJECT_DIR}/.venv/bin/python" "${PROJECT_DIR}/main.py" \
   --model-dir "${PROJECT_DIR}/models/jina-embeddings-v5-text-small-retrieval-mlx-8bit" \
-  --reranker-dir "${PROJECT_DIR}/models/jinaai/jina-reranker-v3-mlx-8bit" \
+  --reranker-dir "${PROJECT_DIR}/models/jina-reranker-v3-mlx-8bit" \
   --chat-model-dir "${PROJECT_DIR}/models/Hy-MT2-1.8B-4bit" \
   serve \
   --host 0.0.0.0 \
